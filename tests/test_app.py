@@ -124,6 +124,20 @@ def test_refinalizing_old_chapter_only_flags_later_chapters(app):
     assert any('待复核' in w.value for w in at.warning)
 
 
+def test_indented_body_is_saved_once_with_indent(app):
+    at, db = app
+    new_book(at)
+    at.radio('section').set_value('章节工作区').run()
+    at.text_input('new_chapter_title').input('旧灯')
+    button(at, '创建章节').click().run()
+    at.text_area('edit_body_1').input('\u3000\u3000林川推开门。\n\u3000\u3000雨停了。').run()
+    assert db.revision(db.chapter(1)['current_revision_id'])['body'] == '\u3000\u3000林川推开门。\n\u3000\u3000雨停了。'
+    saved = len(db.revisions(1))
+    button(at, '保存当前稿').click().run()
+    assert not at.exception
+    assert len(db.revisions(1)) == saved
+
+
 def test_settings_form_does_not_overwrite_another_windows_changes(app):
     at, db = app
     new_book(at)

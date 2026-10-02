@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from novel.store import ValidationError, validate_memory
+from novel.store import ValidationError, trim, validate_memory
 
 
 class ModelError(RuntimeError):
@@ -92,7 +92,7 @@ class ModelClient:
             raw_usage = data.get('usage') or {}
             usage = {key: val for key, val in raw_usage.items()
                      if key in ('prompt_tokens', 'completion_tokens', 'total_tokens') and isinstance(val, int)}
-            return ModelResponse(text.strip(), usage, str(choice.get('finish_reason', 'unknown')))
+            return ModelResponse(trim(text, keep_indent=True), usage, str(choice.get('finish_reason', 'unknown')))
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):
             raise ModelError('模型返回为空或不符合 Chat Completions 格式，请检查服务接口。') from None
 

@@ -172,3 +172,11 @@ def test_long_ending_starts_at_a_paragraph_boundary():
     text = '甲' * 600 + '\n' + '乙' * 300 + '\n' + '丙' * 100
     assert tail_text(text, 500) == '乙' * 300 + '\n' + '丙' * 100
     assert tail_text('甲' * 1000, 500) == '……' + '甲' * 500
+
+
+def test_ai_draft_keeps_first_paragraph_indent(tmp_path):
+    db, book, chapter, rev = setup_story(tmp_path)
+    text = '　　新初稿。\n　　第二段。'
+    client = ModelClient(config(), httpx.MockTransport(lambda r: httpx.Response(200, json=response(text))))
+    result = Writer(db, client).run(chapter, 'draft', '', 2000)
+    assert db.revision(result['candidate_id'])['body'] == text

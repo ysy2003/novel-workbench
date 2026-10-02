@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from novel.model import ModelClient, ModelConfig, ModelError, parse_memory
-from novel.store import Store, ValidationError, safe_filename
+from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
 
 
@@ -133,7 +133,7 @@ def save_editor(chapter_id):
         base = st.session_state[keys['base']]
         old = store.revision(base)
         values = [st.session_state[keys[name]] for name in ('title', 'plan', 'body')]
-        if any(value.strip() != old[name] for value, name in zip(values, ('title', 'plan', 'body'))):
+        if any(trim(value, name == 'body') != old[name] for value, name in zip(values, ('title', 'plan', 'body'))):
             new = store.save_revision(chapter_id, *values, base)
             st.session_state[keys['base']] = new
         elif store.chapter(chapter_id)['current_revision_id'] != base:

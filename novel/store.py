@@ -18,10 +18,17 @@ class Conflict(ValidationError):
     pass
 
 
-def clean_text(value, label, maximum=100000, required=False):
+def trim(value, keep_indent=False):
+    """去掉首尾空白；keep_indent 时只去掉开头的空行，保留首段的全角缩进。"""
+    if keep_indent:
+        return re.sub(r'^(?:[^\S\n]*\n)+', '', value).rstrip()
+    return value.strip()
+
+
+def clean_text(value, label, maximum=100000, required=False, keep_indent=False):
     if not isinstance(value, str):
         raise ValidationError(f'{label}必须是文字。')
-    value = value.strip()
+    value = trim(value, keep_indent)
     if required and not value:
         raise ValidationError(f'请填写{label}。')
     if len(value) > maximum:
@@ -182,7 +189,7 @@ class Store:
 
     def _save(self, c, chapter_id, title, plan, body, expected, source):
         title = clean_text(title, '章节标题', 160, True)
-        plan, body = clean_text(plan, '章节计划', 12000), clean_text(body, '正文', 100000)
+        plan, body = clean_text(plan, '章节计划', 12000), clean_text(body, '正文', 100000, keep_indent=True)
         chapter = c.execute('SELECT * FROM chapters WHERE id=?', (chapter_id,)).fetchone()
         if not chapter:
             raise ValidationError('章节不存在。')
@@ -211,7 +218,7 @@ class Store:
         if self.revision(base_revision)['chapter_id'] != chapter_id:
             raise ValidationError('候选稿与原章节不匹配。')
         title = clean_text(title, '章节标题', 160, True)
-        body = clean_text(body, '正文', 100000, True)
+        body = clean_text(body, '正文', 100000, True, keep_indent=True)
         plan = clean_text(plan, '章节计划', 12000)
         with self.connect(True) as c:
             return c.execute('INSERT INTO revisions(chapter_id,title,plan,body,source,base_revision_id,context_version) '
@@ -325,7 +332,7 @@ class Store:
 
     @staticmethod
     def chapter_txt(number, revision):
-        return f'第{number}章 {revision["title"]}\n\n{revision["body"].strip()}\n'
+        return f'第{number}章 {revision["title"]}\n\n{trim(revision["body"], keep_indent=True)}\n'
 
     def backup_bytes(self):
         with tempfile.TemporaryDirectory() as directory:

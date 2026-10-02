@@ -238,3 +238,15 @@ def test_ten_chapters_export_in_numeric_order_with_latest_state(db):
     blob, _ = db.export_book(book)
     with zipfile.ZipFile(BytesIO(blob)) as archive:
         assert [name[:4] for name in archive.namelist()] == [f'{n:04d}' for n in range(1, 11)]
+
+
+def test_body_keeps_first_paragraph_indent(db):
+    book = db.create_book('缩进')
+    chapter = db.create_chapter(book, '旧灯')
+    revision = db.save_revision(chapter, '旧灯', '', '\n　　林川推开门。\n　　雨停了。\n\n',
+                                db.chapter(chapter)['current_revision_id'])
+    assert db.revision(revision)['body'] == '　　林川推开门。\n　　雨停了。'
+
+
+def test_chapter_txt_keeps_first_paragraph_indent():
+    assert Store.chapter_txt(1, {'title': '旧灯', 'body': '　　林川。\n'}) == '第1章 旧灯\n\n　　林川。\n'
