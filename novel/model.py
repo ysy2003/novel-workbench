@@ -103,7 +103,7 @@ def parse_memory(text):
         text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text, flags=re.IGNORECASE).strip()
     try:
         data = json.loads(text)
-        if not isinstance(data, dict) or set(data) != {'summary', 'facts'}:
+        if not isinstance(data, dict) or not {'summary', 'facts'} <= set(data):
             raise ValueError('Expected memory')
         summary, facts = validate_memory(data['summary'], data['facts'])
         return {'summary': summary, 'facts': facts}

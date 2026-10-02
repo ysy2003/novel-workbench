@@ -5,7 +5,7 @@ import pytest
 
 from novel.model import ModelClient, ModelConfig, ModelError, parse_memory
 from novel.store import Store, ValidationError
-from novel.writer import Writer, select_facts, tail_text
+from novel.writer import TASKS, Writer, select_facts, tail_text
 
 
 def config():
@@ -180,3 +180,25 @@ def test_ai_draft_keeps_first_paragraph_indent(tmp_path):
     client = ModelClient(config(), httpx.MockTransport(lambda r: httpx.Response(200, json=response(text))))
     result = Writer(db, client).run(chapter, 'draft', '', 2000)
     assert db.revision(result['candidate_id'])['body'] == text
+
+
+def test_memory_extraction_does_not_see_chapter_plan(tmp_path):
+    db, book, chapter, rev = setup_story(tmp_path)
+    _, _, _, messages = Writer(db, ModelClient(ModelConfig())).prepare(chapter, 'memory')
+    payload = json.loads(messages[1]['content'])
+    assert payload['本章计划'] == ''
+    assert payload['当前正文'] == '旧段落。保留的结尾。'
+
+
+def test_plan_marks_author_notes_and_draft_keeps_them_out_of_prose():
+    assert '作者备注' in TASKS['plan']
+    assert '作者备注' in TASKS['draft']
+
+
+def test_memory_task_asks_for_short_stable_entity_names_and_few_facts():
+    assert '简短' in TASKS['memory'] and '15' in TASKS['memory']
+
+
+def test_memory_parser_ignores_extra_top_level_fields():
+    data = parse_memory('{"summary":"收到信件","facts":[],"summary_length":4}')
+    assert data == {'summary': '收到信件', 'facts': []}

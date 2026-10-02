@@ -8,11 +8,11 @@ from novel.store import ValidationError, clean_text
 
 
 TASKS = {
-    'plan': '制定当前章节的场景计划，包含：本章目标、人物动机、冲突升级、信息揭露、伏笔与结尾。开场接续“上一章结尾”的情境。只输出计划。',
-    'draft': '依据已确认设定与本章计划写小说正文。开头承接“上一章结尾”，不要复述它。只输出正文，不加章节标题、解释或 Markdown 代码块。避免复述设定和空泛总结。',
+    'plan': '制定当前章节的场景计划，包含：本章目标、人物动机、冲突升级、信息揭露、伏笔与结尾。开场接续“上一章结尾”的情境。读者此刻不该知道的内容（真相、暗线、伏笔用途、后续回收安排）只写在每个场景末尾以“作者备注：”开头的行里，场景描述只写视角人物能看到、听到、知道的事。只输出计划。',
+    'draft': '依据已确认设定与本章计划写小说正文。开头承接“上一章结尾”，不要复述它。计划里“作者备注”开头的内容、大纲里的暗线和真相只用于把握方向，不能写进正文；正文只写视角人物此刻能感知和知道的事。只输出正文，不加章节标题、解释或 Markdown 代码块。避免复述设定和空泛总结。',
     'rewrite': '按作者修改要求重写正文，保持没有要求改动的剧情事实与叙述视角。只输出正文。',
     'review': '检查当前正文与已确认设定和历史事实的一致性。逐条给出问题位置、正文原句、历史依据的章节、建议。区分明确矛盾与信息不足，不把自己的猜测写成事实；没有发现问题时如实说明。',
-    'memory': '从当前正文提取本章摘要和需要供后续章节使用的事实变化。只提取本章实际发生或明确揭露的事实，不能把计划或猜测当成事实。同一对象和属性只输出最终状态。人物知道的秘密与世界真相分开记录；伏笔的属性要包含伏笔名称。只输出 JSON：{"summary":"本章发生了什么","facts":[{"entity":"人物/物品/事件名称","attribute":"状态/位置/知晓信息/伏笔名称等具体属性","value":"当前事实"}]}。',
+    'memory': '从当前正文提取本章摘要和需要供后续章节使用的事实变化。只提取正文里实际发生或明确揭露的事实，不写猜测和伏笔用途。对象名称要简短、稳定：人物用姓名或固定称呼，物品和地点用最短的通用叫法（如“守则”“冷柜”“雨衣男人”），优先沿用历史事实里已有的对象名称。最多 15 条，只记录会影响后续章节的状态变化和新揭露的信息，不记录一次性的环境描写。同一对象和属性只输出最终状态。人物知道的秘密与世界真相分开记录。摘要 300 字以内。只输出 JSON：{"summary":"本章发生了什么","facts":[{"entity":"人物/物品/事件名称","attribute":"状态/位置/知晓信息/伏笔名称等具体属性","value":"当前事实"}]}。',
 }
 
 
@@ -73,7 +73,8 @@ class Writer:
         if passage:
             directive = '按作者要求重写指定段落。只输出替换段落，不能输出其他段落或说明。系统会精确替换该段原文。'
         body = revision['body'] if task != 'plan' else ''
-        query = '\n'.join([revision['title'], revision['plan'], instructions, passage, body,
+        plan = revision['plan'] if task != 'memory' else ''
+        query = '\n'.join([revision['title'], plan, instructions, passage, body,
                            *(s['summary'] for s in context['recent_summaries'])])
         facts, omitted = select_facts(context['facts'], query, context['source_chapters'][-RECENT_CHAPTERS:])
         context['sent_facts'] = facts
@@ -82,7 +83,7 @@ class Writer:
                                                    'revision_id': previous['revision_id'],
                                                    'text': tail_text(previous['body'])}
         payload = {'故事': {k: context['book'][k] for k in ('title', 'premise', 'genre', 'bible', 'style', 'outline')},
-                   '本章序号': chapter['number'], '本章标题': revision['title'], '本章计划': revision['plan'],
+                   '本章序号': chapter['number'], '本章标题': revision['title'], '本章计划': plan,
                    '历史事实': facts,
                    '历史事实范围': f'只含本章提到的对象和最近 {RECENT_CHAPTERS} 章更新的事实，另有 {omitted} 条未发送。',
                    '近期章节摘要': context['recent_summaries'],
