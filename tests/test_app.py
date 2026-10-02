@@ -138,6 +138,28 @@ def test_indented_body_is_saved_once_with_indent(app):
     assert len(db.revisions(1)) == saved
 
 
+def test_outline_section_saves_volume_and_creates_chapters_from_beats(app):
+    at, db = app
+    new_book(at)
+    at.radio('section').set_value('大纲').run()
+    assert not at.exception
+    at.text_input('volume_title_1_new').input('第一夜')
+    at.text_area('volume_outline_1_new').input('林默入职，活过第一周。')
+    button(at, '保存分卷').click().run()
+    assert not at.exception
+    assert [(v['number'], v['title'], v['start_chapter'], v['end_chapter']) for v in db.volumes(1)] == [(1, '第一夜', 1, 30)]
+    db.save_beats(1, 1, 30, [{'number': 1, 'title': '第一条规则', 'brief': '入职第一夜'},
+                             {'number': 2, 'title': '灯牌', 'brief': '不关灯牌'}])
+    at.run()
+    assert any('细纲只领先' in w.value for w in at.warning)
+    at.radio('section').set_value('章节工作区').run()
+    button(at, '按细纲创建第 1 章：第一条规则').click().run()
+    assert not at.exception
+    revision = db.revision(db.chapter(1)['current_revision_id'])
+    assert (revision['title'], revision['plan']) == ('第一条规则', '入职第一夜')
+    assert any(b.label == '按细纲创建第 2 章：灯牌' for b in at.button)
+
+
 def test_settings_form_does_not_overwrite_another_windows_changes(app):
     at, db = app
     new_book(at)

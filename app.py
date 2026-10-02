@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from novel.model import ModelClient, ModelConfig, ModelError, parse_memory
+from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
 
@@ -84,7 +84,7 @@ with st.sidebar:
         if st.session_state.get('book_pick') not in book_names:
             st.session_state['book_pick'] = books[0]['id']
         book_id = st.selectbox('当前作品', list(book_names), format_func=book_names.get, key='book_pick')
-        section = st.radio('工作区', ['作品设定', '章节工作区', '故事记忆', '存稿与导出', '模型与记录'], key='section')
+        section = st.radio('工作区', ['作品设定', '大纲', '章节工作区', '故事记忆', '存稿与导出', '模型与记录'], key='section')
         st.divider()
         with st.expander('＋ 新建作品'):
             book_creation('sidebar_create')
@@ -199,6 +199,10 @@ def show_assistant(chapter_id, revision):
         with st.expander('本次会用到的故事资料'):
             st.caption(f'来自 {len(context["source_chapters"])} 个定稿章节；发送 {len(context["sent_facts"])} / '
                        f'{len(context["facts"])} 条事实（本章提到的对象和最近 {RECENT_CHAPTERS} 章的更新）。')
+            volume = context['volume']
+            volume_label = f'第 {volume["number"]} 卷《{volume["title"]}》' if volume else '未分卷'
+            st.caption(f'本卷：{volume_label}；本章细纲：{"有" if context["beat"] else "无"}；'
+                       f'后续细纲 {len(context["next_beats"])} 章。')
             if context['previous_ending']:
                 st.caption(f'附上第 {context["previous_ending"]["chapter_number"]} 章定稿结尾 '
                            f'{len(context["previous_ending"]["text"])} 字，用于衔接。')
@@ -305,8 +309,178 @@ def show_history(chapter_id, revision):
             st.error(str(error))
 
 
+BEATS_AHEAD = 5
+
+
+def show_beat_progress(quiet=False):
+    if not store.volumes(book_id):
+        return
+    last_chapter = max((ch['number'] for ch in chapters), default=0)
+    last_beat = max((b['number'] for b in store.beats(book_id)), default=0)
+    progress = f'已建到第 {last_chapter} 章，细纲写到第 {last_beat} 章'
+    if last_beat - last_chapter >= BEATS_AHEAD:
+        if not quiet:
+            st.caption(progress + '。')
+        return
+    message = f'细纲只领先 {max(last_beat - last_chapter, 0)} 章（{progress}）'
+    if quiet:
+        st.caption(message + '，可到“大纲”续写细纲。')
+    else:
+        st.warning(message + '，建议续写细纲。')
+
+
+def beat_rows(frame):
+    rows = []
+    for row in frame.fillna('').to_dict('records'):
+        if not any(str(value).strip() for value in row.values()):
+            continue
+        try:
+            number = int(row['章号'])
+        except (TypeError, ValueError):
+            raise ValidationError('章号必须是数字。') from None
+        rows.append({'number': number, 'title': str(row['标题']), 'brief': str(row['要点'])})
+    return rows
+
+
+def beat_frame(rows):
+    return pd.DataFrame(rows, columns=['number', 'title', 'brief']).rename(
+        columns={'number': '章号', 'title': '标题', 'brief': '要点'})
+
+
+def show_volume_editor(volumes):
+    by_number = {v['number']: v for v in volumes}
+    picked = st.selectbox('分卷', [*by_number, 'new'], key=f'volume_pick_{book_id}',
+                          format_func=lambda n: '＋ 新建分卷' if n == 'new' else
+                          f'第 {n} 卷 · {by_number[n]["title"]}（第 {by_number[n]["start_chapter"]}–{by_number[n]["end_chapter"]} 章）')
+    if picked == 'new':
+        last = volumes[-1] if volumes else None
+        start = last['end_chapter'] + 1 if last else 1
+        volume = {'number': last['number'] + 1 if last else 1, 'title': '', 'start_chapter': start,
+                  'end_chapter': start + 29, 'outline': ''}
+    else:
+        volume = by_number[picked]
+    keys = {name: f'volume_{name}_{book_id}_{picked}' for name in ('number', 'title', 'start', 'end', 'outline')}
+    with st.form(f'volume_form_{book_id}_{picked}'):
+        a, b, c, d = st.columns([1, 2, 1, 1])
+        number = a.number_input('卷号', min_value=1, step=1, value=volume['number'], key=keys['number'])
+        title = b.text_input('卷名', value=volume['title'], key=keys['title'])
+        start = c.number_input('起始章', min_value=1, step=1, value=volume['start_chapter'], key=keys['start'])
+        end = d.number_input('结束章', min_value=1, step=1, value=volume['end_chapter'], key=keys['end'])
+        outline = st.text_area('卷大纲', value=volume['outline'], height=160, key=keys['outline'],
+                               placeholder='本卷核心冲突、阶段目标、高潮、卷末钩子。')
+        if st.form_submit_button('保存分卷', type='primary'):
+            try:
+                store.save_volume(book_id, int(number), title, int(start), int(end), outline)
+                st.session_state['pending_volume'] = int(number)
+                notice('分卷已保存。')
+                st.rerun()
+            except ValidationError as error:
+                st.error(str(error))
+    if picked == 'new':
+        return None
+    if st.button('删除这一卷（细纲保留）', key=f'delete_volume_{book_id}_{picked}'):
+        store.delete_volume(book_id, picked)
+        st.session_state['pending_volume'] = 'new'
+        notice('分卷已删除，这一卷范围内的细纲仍然保留。')
+        st.rerun()
+    return volume
+
+
+def show_beat_editor(volume):
+    st.markdown(f'### 第 {volume["number"]} 卷细纲')
+    rows = [b for b in store.beats(book_id) if volume['start_chapter'] <= b['number'] <= volume['end_chapter']]
+    version = book['context_version']
+    with st.form(f'beats_form_{book_id}_{volume["number"]}_{version}'):
+        edited = st.data_editor(beat_frame(rows), num_rows='dynamic', hide_index=True, width='stretch',
+                                key=f'beats_editor_{book_id}_{volume["number"]}_{version}',
+                                column_config={'章号': st.column_config.NumberColumn('章号', min_value=1, step=1, width='small'),
+                                               '标题': st.column_config.TextColumn('标题', width='medium'),
+                                               '要点': st.column_config.TextColumn('要点', width='large')})
+        st.caption('可以直接修改、增删行；保存后替换本卷范围内的细纲。')
+        if st.form_submit_button('保存细纲'):
+            try:
+                store.save_beats(book_id, volume['start_chapter'], volume['end_chapter'], beat_rows(edited))
+                notice('细纲已保存。')
+                st.rerun()
+            except ValidationError as error:
+                st.error(str(error))
+
+
+def show_beat_generator():
+    st.markdown('### AI 续写细纲')
+    count = st.number_input('续写章数', min_value=1, max_value=30, value=10, step=1, key=f'beat_count_{book_id}')
+    instructions = st.text_area('本次要求（可选）', key=f'beat_instructions_{book_id}',
+                                placeholder='例如：第 5 章安排一次小高潮。')
+    try:
+        start, end, target = store.beat_window(book_id, int(count))
+        st.caption(f'将生成第 {start}–{end} 章细纲（第 {target["number"]} 卷《{target["title"]}》），'
+                   '参考总纲、本卷大纲、本卷已有细纲和最近 6 章摘要。结果先作为候选，采用后才写入。')
+        window_ok = True
+    except ValidationError as error:
+        st.info(str(error))
+        window_ok = False
+    if not config.ready:
+        st.caption('配置模型后即可使用。请到“模型与记录”查看接入方法。')
+    if st.button('开始续写细纲', type='primary', disabled=not (config.ready and window_ok), key=f'run_beats_{book_id}'):
+        try:
+            with st.spinner('正在生成细纲…'):
+                Writer(store, ModelClient(config)).run_beats(book_id, int(count), instructions)
+            notice('细纲候选已生成，请在下方查看。')
+            st.rerun()
+        except (ValidationError, ModelError) as error:
+            st.error(str(error))
+    run = next((r for r in store.runs(book_id) if r['task'] == 'beats'), None)
+    if not run:
+        return
+    st.caption(f'最近一次续写 · {run["status"]} · {run["created_at"]}')
+    if run['error']:
+        st.warning(run['error'])
+    if run['status'] != '成功':
+        if run['output']:
+            st.text_area('模型返回', run['output'], height=200, disabled=True, key=f'beats_output_{run["id"]}')
+        return
+    candidates = parse_beats(run['output'])
+    st.dataframe(beat_frame(candidates), hide_index=True, width='stretch')
+    existing = {b['number']: b for b in store.beats(book_id)}
+    if all(existing.get(c['number']) == c for c in candidates):
+        st.caption('这批细纲已采用，可以在上方表格里继续修改。')
+    elif run['context_version'] != book['context_version']:
+        st.info('生成后大纲、设定或记忆已改变，这批候选已过期。可以参考内容手动填写，或重新生成。')
+    elif st.button('采用这些细纲', type='primary', key=f'adopt_beats_{run["id"]}'):
+        try:
+            store.adopt_beats(book_id, candidates, run['context_version'])
+            notice('细纲已采用。')
+            st.rerun()
+        except ValidationError as error:
+            st.error(str(error))
+
+
+def show_outline():
+    st.title('大纲')
+    st.write('总纲（全书主线、暗线、伏笔表）在“作品设定 → 故事大纲”里维护；这里管理分卷大纲和每章细纲。')
+    if 'pending_volume' in st.session_state:
+        st.session_state[f'volume_pick_{book_id}'] = st.session_state.pop('pending_volume')
+    show_beat_progress()
+    volume = show_volume_editor(store.volumes(book_id))
+    if volume:
+        show_beat_editor(volume)
+    st.divider()
+    show_beat_generator()
+
+
 def show_chapters():
     st.title('章节工作区')
+    next_number = max((ch['number'] for ch in chapters), default=0) + 1
+    next_beat = next((b for b in store.beats(book_id) if b['number'] == next_number), None)
+    if next_beat and st.button(f'按细纲创建第 {next_number} 章：{next_beat["title"]}', type='primary',
+                               key=f'from_beat_{book_id}_{next_number}'):
+        try:
+            st.session_state[f'chapter_pick_{book_id}'] = store.create_chapter(book_id, next_beat['title'], next_beat['brief'])
+            notice('章节已按细纲创建，计划里是细纲要点，可以用“规划本章”扩成场景计划。')
+            st.rerun()
+        except ValidationError as error:
+            st.error(str(error))
+    show_beat_progress(quiet=True)
     with st.expander('＋ 新建章节', expanded=not chapters):
         with st.form(f'new_chapter_{book_id}', clear_on_submit=True):
             title = st.text_input('新章节标题', placeholder='例如：雨夜来信', key='new_chapter_title')
@@ -485,5 +659,5 @@ def show_model():
     st.text_area('返回内容', run['output'], height=260, disabled=True, key=f'audit_output_{selected}')
 
 
-{'作品设定': show_settings, '章节工作区': show_chapters, '故事记忆': show_memory,
+{'作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '故事记忆': show_memory,
  '存稿与导出': show_exports, '模型与记录': show_model}[section]()

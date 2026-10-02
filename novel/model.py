@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from novel.store import ValidationError, trim, validate_memory
+from novel.store import ValidationError, trim, validate_beats, validate_memory
 
 
 class ModelError(RuntimeError):
@@ -97,15 +97,33 @@ class ModelClient:
             raise ModelError('模型返回为空或不符合 Chat Completions 格式，请检查服务接口。') from None
 
 
-def parse_memory(text):
+def strip_fence(text):
     text = text.strip()
     if text.startswith('```'):
         text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text, flags=re.IGNORECASE).strip()
+    return text
+
+
+def parse_memory(text):
     try:
-        data = json.loads(text)
+        data = json.loads(strip_fence(text))
         if not isinstance(data, dict) or not {'summary', 'facts'} <= set(data):
             raise ValueError('Expected memory')
         summary, facts = validate_memory(data['summary'], data['facts'])
         return {'summary': summary, 'facts': facts}
     except (TypeError, KeyError, ValueError) as error:
         raise ValidationError('记忆提取结果格式不完整。请手动填写本章摘要与事实，或重新提取。') from error
+
+
+def parse_beats(text, start=None, end=None):
+    """解析 AI 细纲；给出 start–end 时要求章号正好连续覆盖这个范围。"""
+    try:
+        data = json.loads(strip_fence(text))
+        if not isinstance(data, dict) or not isinstance(data.get('beats'), list):
+            raise ValueError('Expected beats')
+        rows = validate_beats(data['beats'], start or 1, end or 10 ** 6)
+        if start is not None and [row['number'] for row in rows] != list(range(start, end + 1)):
+            raise ValueError('Incomplete beats')
+        return rows
+    except (TypeError, ValueError) as error:
+        raise ValidationError('细纲结果格式不完整或章号不对，请重新生成。') from error

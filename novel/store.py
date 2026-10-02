@@ -10,6 +10,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+NEXT_BEATS = 3
+
+
 class ValidationError(ValueError):
     pass
 
@@ -52,6 +55,28 @@ def validate_memory(summary, facts):
         keys.add(key)
         result.append(item)
     return summary, result
+
+
+def positive_int(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValidationError(f'{label}必须是正整数。')
+    return value
+
+
+def validate_beats(rows, start, end):
+    result, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValidationError('每条细纲需要章号、标题和要点。')
+        number = positive_int(row.get('number'), '章号')
+        if not start <= number <= end:
+            raise ValidationError(f'第 {number} 章不在细纲范围（第 {start}–{end} 章）内。')
+        if number in seen:
+            raise ValidationError(f'第 {number} 章细纲重复。')
+        seen.add(number)
+        result.append({'number': number, 'title': clean_text(row.get('title'), '细纲标题', 60, True),
+                       'brief': clean_text(row.get('brief'), '细纲要点', 1000, True)})
+    return sorted(result, key=lambda row: row['number'])
 
 
 def safe_filename(value):
@@ -100,7 +125,15 @@ class Store:
                 revision_id INTEGER NOT NULL REFERENCES revisions(id),
                 status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS volumes(
+                id INTEGER PRIMARY KEY, book_id INTEGER NOT NULL REFERENCES books(id),
+                number INTEGER NOT NULL, title TEXT NOT NULL,
+                start_chapter INTEGER NOT NULL, end_chapter INTEGER NOT NULL,
+                outline TEXT NOT NULL DEFAULT '', UNIQUE(book_id, number));
+            CREATE TABLE IF NOT EXISTS beats(
+                book_id INTEGER NOT NULL REFERENCES books(id), number INTEGER NOT NULL,
+                title TEXT NOT NULL, brief TEXT NOT NULL, PRIMARY KEY(book_id, number));
+            PRAGMA user_version=2;
             ''')
 
     @contextmanager
@@ -158,6 +191,87 @@ class Store:
             # 版本号递增只让基于旧设定生成的候选稿失效。
             c.execute('UPDATE books SET title=?,premise=?,genre=?,bible=?,style=?,outline=?, '
                       'context_version=context_version+1 WHERE id=?', (*values, book_id))
+
+    @staticmethod
+    def _touch_book(c, book_id):
+        if not c.execute('SELECT 1 FROM books WHERE id=?', (book_id,)).fetchone():
+            raise ValidationError('作品不存在。')
+        c.execute('UPDATE books SET context_version=context_version+1 WHERE id=?', (book_id,))
+
+    def volumes(self, book_id):
+        return self.all('SELECT * FROM volumes WHERE book_id=? ORDER BY number', (book_id,))
+
+    def volume_for(self, book_id, number):
+        rows = self.all('SELECT * FROM volumes WHERE book_id=? AND start_chapter<=? AND end_chapter>=?',
+                        (book_id, number, number))
+        return rows[0] if rows else None
+
+    def save_volume(self, book_id, number, title, start_chapter, end_chapter, outline):
+        number, start, end = (positive_int(v, label) for v, label in
+                              ((number, '卷号'), (start_chapter, '起始章'), (end_chapter, '结束章')))
+        if start > end:
+            raise ValidationError('起始章不能大于结束章。')
+        title, outline = clean_text(title, '卷名', 60, True), clean_text(outline, '卷大纲', 8000)
+        with self.connect(True) as c:
+            self._touch_book(c, book_id)
+            overlap = c.execute('SELECT number FROM volumes WHERE book_id=? AND number<>? '
+                                'AND start_chapter<=? AND end_chapter>=?', (book_id, number, end, start)).fetchone()
+            if overlap:
+                raise ValidationError(f'章节范围与第 {overlap[0]} 卷重叠。')
+            c.execute('INSERT INTO volumes(book_id,number,title,start_chapter,end_chapter,outline) VALUES(?,?,?,?,?,?) '
+                      'ON CONFLICT(book_id,number) DO UPDATE SET title=excluded.title, '
+                      'start_chapter=excluded.start_chapter, end_chapter=excluded.end_chapter, outline=excluded.outline',
+                      (book_id, number, title, start, end, outline))
+
+    def delete_volume(self, book_id, number):
+        with self.connect(True) as c:
+            self._touch_book(c, book_id)
+            c.execute('DELETE FROM volumes WHERE book_id=? AND number=?', (book_id, number))
+
+    def beats(self, book_id):
+        return self.all('SELECT number,title,brief FROM beats WHERE book_id=? ORDER BY number', (book_id,))
+
+    def save_beats(self, book_id, start, end, rows):
+        """作者手动编辑：用 rows 替换第 start–end 章的细纲。"""
+        rows = validate_beats(rows, start, end)
+        with self.connect(True) as c:
+            self._touch_book(c, book_id)
+            c.execute('DELETE FROM beats WHERE book_id=? AND number BETWEEN ? AND ?', (book_id, start, end))
+            c.executemany('INSERT INTO beats(book_id,number,title,brief) VALUES(?,?,?,?)',
+                          [(book_id, r['number'], r['title'], r['brief']) for r in rows])
+
+    def adopt_beats(self, book_id, rows, expected_context):
+        """采用 AI 候选细纲：只填空位，不覆盖已有细纲。"""
+        rows = validate_beats(rows, 1, 10 ** 6)
+        if not rows:
+            raise ValidationError('没有可采用的细纲。')
+        with self.connect(True) as c:
+            version = c.execute('SELECT context_version FROM books WHERE id=?', (book_id,)).fetchone()
+            if version is None:
+                raise ValidationError('作品不存在。')
+            if version[0] != expected_context:
+                raise Conflict('生成后大纲、设定或记忆已改变，请重新生成细纲。')
+            numbers = [r['number'] for r in rows]
+            taken = c.execute(f'SELECT number FROM beats WHERE book_id=? AND number IN ({",".join("?" * len(numbers))})',
+                              (book_id, *numbers)).fetchone()
+            if taken:
+                raise Conflict(f'第 {taken[0]} 章已有细纲，候选不会覆盖它。请重新生成或手动合并。')
+            c.executemany('INSERT INTO beats(book_id,number,title,brief) VALUES(?,?,?,?)',
+                          [(book_id, r['number'], r['title'], r['brief']) for r in rows])
+            self._touch_book(c, book_id)
+
+    def beat_window(self, book_id, count):
+        """滚动续写的范围：从已有细纲和已建章节之后开始，不超出所在分卷。"""
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 30:
+            raise ValidationError('一次续写 1–30 章细纲。')
+        with self.connect() as c:
+            last = c.execute('SELECT MAX(n) FROM (SELECT MAX(number) AS n FROM beats WHERE book_id=? '
+                             'UNION ALL SELECT MAX(number) FROM chapters WHERE book_id=?)', (book_id, book_id)).fetchone()[0]
+        start = (last or 0) + 1
+        volume = self.volume_for(book_id, start)
+        if not volume:
+            raise ValidationError(f'还没有覆盖第 {start} 章的分卷，请先在“大纲”里建立分卷。')
+        return start, min(start + count - 1, volume['end_chapter']), volume
 
     def chapters(self, book_id):
         return self.all('SELECT ch.*,r.title,r.plan,r.body,m.stale FROM chapters ch '
@@ -295,8 +409,14 @@ class Store:
                             'JOIN revisions r ON r.id=ch.finalized_revision_id '
                             'WHERE ch.book_id=? AND ch.number<? ORDER BY ch.number DESC LIMIT 1',
                             (book['id'], chapter['number']))
-        return {'book': book, 'chapter_number': chapter['number'], 'facts': list(current.values()),
+        number = chapter['number']
+        nearby = {b['number']: b for b in self.beats(book['id']) if number <= b['number'] <= number + NEXT_BEATS}
+        return {'book': book, 'chapter_number': number, 'facts': list(current.values()),
                 'previous_chapter': previous[0] if previous else None,
+                'volume': self.volume_for(book['id'], number),
+                'volumes': [{k: v[k] for k in ('number', 'title', 'start_chapter', 'end_chapter')}
+                            for v in self.volumes(book['id'])],
+                'beat': nearby.get(number), 'next_beats': [nearby[n] for n in sorted(nearby) if n > number],
                 'recent_summaries': [{'chapter_number': m['number'], 'summary': m['summary'],
                                       'revision_id': m['revision_id']} for m in memories[-6:]],
                 'source_chapters': [m['number'] for m in memories],
