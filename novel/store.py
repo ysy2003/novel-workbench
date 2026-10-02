@@ -315,9 +315,9 @@ class Store:
         c.execute('UPDATE chapters SET current_revision_id=? WHERE id=?', (revision, chapter_id))
         return revision
 
-    def save_revision(self, chapter_id, title, plan, body, expected):
+    def save_revision(self, chapter_id, title, plan, body, expected, source='手工稿'):
         with self.connect(True) as c:
-            return self._save(c, chapter_id, title, plan, body, expected, '手工稿')
+            return self._save(c, chapter_id, title, plan, body, expected, source)
 
     def restore(self, chapter_id, revision_id, expected):
         old = self.revision(revision_id)
@@ -339,7 +339,7 @@ class Store:
                              'VALUES(?,?,?,?,?,?,?)', (chapter_id, title, plan, body, 'AI 候选稿',
                                                       base_revision, context_version)).lastrowid
 
-    def adopt_candidate(self, chapter_id, candidate_id):
+    def adopt_candidate(self, chapter_id, candidate_id, source='采纳 AI 候选稿'):
         candidate = self.revision(candidate_id)
         if candidate['chapter_id'] != chapter_id or candidate['source'] != 'AI 候选稿':
             raise ValidationError('候选稿不属于本章。')
@@ -349,7 +349,7 @@ class Store:
             if candidate['context_version'] != version:
                 raise Conflict('生成后故事设定或正式记忆已改变，请重新生成或手动合并候选稿。')
             return self._save(c, chapter_id, candidate['title'], candidate['plan'], candidate['body'],
-                              candidate['base_revision_id'], '采纳 AI 候选稿')
+                              candidate['base_revision_id'], source)
 
     def memory(self, book_id):
         rows = self.all('SELECT m.*,ch.number FROM memories m JOIN chapters ch ON ch.id=m.chapter_id '
@@ -479,6 +479,9 @@ class Store:
     def link_candidate(self, run_id, revision_id):
         with self.connect(True) as c:
             c.execute('UPDATE runs SET candidate_id=? WHERE id=?', (revision_id, run_id))
+
+    def run(self, run_id):
+        return self.one('SELECT * FROM runs WHERE id=?', (run_id,))
 
     def runs(self, book_id, chapter_id=None):
         query = 'SELECT * FROM runs WHERE book_id=?'

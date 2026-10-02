@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from novel.autowrite import MAX_CHAPTERS, auto_chapters, autowrite, capacity
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -84,7 +85,7 @@ with st.sidebar:
         if st.session_state.get('book_pick') not in book_names:
             st.session_state['book_pick'] = books[0]['id']
         book_id = st.selectbox('当前作品', list(book_names), format_func=book_names.get, key='book_pick')
-        section = st.radio('工作区', ['作品设定', '大纲', '章节工作区', '故事记忆', '存稿与导出', '模型与记录'], key='section')
+        section = st.radio('工作区', ['作品设定', '大纲', '章节工作区', '自动连写', '故事记忆', '存稿与导出', '模型与记录'], key='section')
         st.divider()
         with st.expander('＋ 新建作品'):
             book_creation('sidebar_create')
@@ -536,6 +537,66 @@ def show_chapters():
             show_history(chapter_id, revision)
 
 
+def show_autowrite():
+    st.title('自动连写')
+    st.write('按细纲从下一章开始连续写作：每章自动规划、写初稿、检查、提取记忆并定稿。'
+             '任何一步不通过就停下，出问题的那一章留给你处理。已有章节不会被改动。')
+    cap = capacity(store, book_id)
+    if cap['unfinished']:
+        st.warning(f'第 {cap["unfinished"][0]} 章还没定稿。先在“章节工作区”定稿后才能连写。')
+    elif not cap['available']:
+        st.info(f'第 {cap["next"]} 章还没有细纲。请先到“大纲”续写细纲。')
+    else:
+        st.caption(f'可以从第 {cap["next"]} 章开始，连续 {cap["available"]} 章有细纲。')
+    limit = max(1, min(MAX_CHAPTERS, cap['available']))
+    count = st.number_input('连写章数', min_value=1, max_value=limit, value=min(3, limit), step=1,
+                            key=f'auto_count_{book_id}')
+    target = st.number_input('每章目标字数', min_value=500, max_value=12000, value=2000, step=100,
+                             key=f'auto_target_{book_id}')
+    st.caption('检查标准：字数在目标的一半到两倍之间，正文不出现“作者备注”，模型输出完整，记忆格式正确。'
+               '每章约 1–1.5 分钟；运行期间不要关闭或刷新页面，中途断开时已完成的章节会保留。')
+    if not config.ready:
+        st.caption('配置模型后即可使用。请到“模型与记录”查看接入方法。')
+    ready = config.ready and not cap['unfinished'] and cap['available'] > 0
+    if st.button('开始自动连写', type='primary', disabled=not ready, key=f'auto_run_{book_id}'):
+        last = cap['next'] + int(count) - 1
+        with st.status(f'正在连写第 {cap["next"]}–{last} 章…', expanded=True) as status:
+            try:
+                result = autowrite(store, Writer(store, ModelClient(config)), book_id, int(count), int(target),
+                                   lambda number, step: st.write(f'第 {number} 章：{step}'))
+                stopped = result['stopped']
+                status.update(label=f'第 {stopped["number"]} 章在“{stopped["step"]}”停下' if stopped
+                              else f'完成 {len(result["done"])} 章', state='error' if stopped else 'complete')
+                st.session_state[f'auto_result_{book_id}'] = result
+            except (ValidationError, ModelError) as error:
+                status.update(label='没有开始', state='error')
+                st.error(str(error))
+        if f'auto_result_{book_id}' in st.session_state:
+            st.rerun()
+    result = st.session_state.get(f'auto_result_{book_id}')
+    if result:
+        st.markdown('#### 最近一次连写')
+        if not result['stopped']:
+            st.success(f'完成 {len(result["done"])} 章，全部通过检查并定稿。')
+        if result['done']:
+            st.dataframe([{'章节': f'第 {d["number"]} 章', '标题': d['title'], '字数': d['chars'],
+                           '记忆条数': d['facts'], '耗时（秒）': round(d['elapsed'])} for d in result['done']],
+                         hide_index=True, width='stretch')
+        if result['stopped']:
+            stopped = result['stopped']
+            st.warning(f'第 {stopped["number"]} 章停在“{stopped["step"]}”：{stopped["reason"]}。'
+                       '这一章已经建好，请到“章节工作区”手动处理并定稿，之后可以继续连写。')
+    st.markdown('### 自动连写的章节')
+    written = auto_chapters(store, book_id)
+    if not written:
+        st.caption('暂无。你修改并重新定稿后，章节会从这里移除。')
+        return
+    st.caption('这些章节的定稿还是自动连写的原样。需要修改的，到“章节工作区”改完重新定稿；后面的章节会标为待复核，只作提醒。')
+    for chapter in written:
+        with st.expander(f'第 {chapter["number"]} 章 · {chapter["title"]} · 约 {count_chars(chapter["body"])} 字'):
+            st.text_area('正文', chapter['body'], height=320, disabled=True, key=f'auto_body_{chapter["id"]}')
+
+
 def show_memory():
     st.title('故事记忆')
     st.write('每条记忆都来自你确认过的定稿。前文重新定稿后，后续章节会标为待复核；这只是提醒，不影响继续写作。')
@@ -659,5 +720,5 @@ def show_model():
     st.text_area('返回内容', run['output'], height=260, disabled=True, key=f'audit_output_{selected}')
 
 
-{'作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '故事记忆': show_memory,
+{'作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '自动连写': show_autowrite, '故事记忆': show_memory,
  '存稿与导出': show_exports, '模型与记录': show_model}[section]()

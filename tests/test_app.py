@@ -160,6 +160,17 @@ def test_outline_section_saves_volume_and_creates_chapters_from_beats(app):
     assert any(b.label == '按细纲创建第 2 章：灯牌' for b in at.button)
 
 
+def test_autowrite_section_shows_how_far_it_can_write_and_needs_a_model(app):
+    at, db = app
+    new_book(at)
+    db.save_volume(1, 1, '第一夜', 1, 30, '')
+    db.save_beats(1, 1, 30, [{'number': n, 'title': f'细纲{n}', 'brief': '要点'} for n in (1, 2, 3)])
+    at.radio('section').set_value('自动连写').run()
+    assert not at.exception
+    assert any('连续 3 章有细纲' in c.value for c in at.caption)
+    assert button(at, '开始自动连写').disabled
+
+
 def test_settings_form_does_not_overwrite_another_windows_changes(app):
     at, db = app
     new_book(at)
