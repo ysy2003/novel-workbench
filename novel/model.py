@@ -15,6 +15,11 @@ class ModelError(RuntimeError):
     pass
 
 
+# 思考设置对应的请求字段：reasoning_effort 为顶层参数；off 用 DeepSeek 的 thinking 字段关闭思考。
+REASONING_FIELDS = {'low': {'reasoning_effort': 'low'}, 'high': {'reasoning_effort': 'high'},
+                    'max': {'reasoning_effort': 'max'}, 'off': {'thinking': {'type': 'disabled'}}}
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     endpoint: str = ''
@@ -22,13 +27,15 @@ class ModelConfig:
     api_key: str = field(default='', repr=False)
     timeout: float = 120
     max_tokens: int = 8192
+    plan_reasoning: str = ''
 
     @classmethod
     def from_env(cls):
         try:
             return cls(os.getenv('NOVEL_API_URL', '').strip(), os.getenv('NOVEL_MODEL', '').strip(),
                        os.getenv('NOVEL_API_KEY', '').strip(), float(os.getenv('NOVEL_API_TIMEOUT', '120')),
-                       int(os.getenv('NOVEL_MAX_OUTPUT_TOKENS', '8192')))
+                       int(os.getenv('NOVEL_MAX_OUTPUT_TOKENS', '8192')),
+                       os.getenv('NOVEL_PLAN_REASONING', '').strip().lower())
         except ValueError:
             raise ValidationError('模型超时或最大输出 token 配置需要是数字。') from None
 
@@ -40,6 +47,8 @@ class ModelConfig:
             raise ValidationError('模型接口请使用 HTTPS；本机测试接口可使用 HTTP。')
         if not url.hostname or url.username or url.password or url.query or url.fragment:
             raise ValidationError('模型接口需要完整地址，不能包含账号、密码、查询参数或片段。')
+        if self.plan_reasoning not in ('', *REASONING_FIELDS):
+            raise ValidationError('NOVEL_PLAN_REASONING 只能是 low、high、max、off 或留空。')
         if not 5 <= self.timeout <= 600 or not 256 <= self.max_tokens <= 65536:
             raise ValidationError('模型超时范围为 5–600 秒，最大输出范围为 256–65536 token。')
 
@@ -66,14 +75,15 @@ class ModelClient:
         self.config = config
         self.transport = transport
 
-    def generate(self, messages):
+    def generate(self, messages, reasoning=''):
         self.config.validate()
         try:
             with httpx.Client(timeout=self.config.timeout, follow_redirects=False, transport=self.transport) as client:
                 response = client.post(self.config.endpoint,
                                        headers={'Authorization': f'Bearer {self.config.api_key}'},
                                        json={'model': self.config.model, 'messages': messages,
-                                             'stream': False, 'max_tokens': self.config.max_tokens})
+                                             'stream': False, 'max_tokens': self.config.max_tokens,
+                                             **REASONING_FIELDS.get(reasoning, {})})
         except httpx.TimeoutException:
             raise ModelError('模型请求超时；原稿已保留。服务端可能已产生用量，请核对后手动重试。') from None
         except httpx.HTTPError:

@@ -698,7 +698,8 @@ def show_model():
     st.write('将项目中的 `.env.example` 复制为 `.env`，在本机填写下列配置后重启应用。')
     st.code('NOVEL_API_URL=服务商完整的 Chat Completions 请求地址\nNOVEL_MODEL=模型名称\nNOVEL_API_KEY=你的密钥', language='bash')
     st.caption('当前适配 Chat Completions 协议；其他协议需增加适配器。密钥不写入数据库。每次生成前可以查看将发送的资料。')
-    st.caption(f'当前配置：超时 {config.timeout:g} 秒；最大输出 {config.max_tokens} token。没有设置价格，暂不估算金额。')
+    st.caption(f'当前配置：超时 {config.timeout:g} 秒；最大输出 {config.max_tokens} token；'
+               f'规划本章的思考强度 {config.plan_reasoning or "默认"}（NOVEL_PLAN_REASONING）。没有设置价格，暂不估算金额。')
     st.markdown('### 调用记录')
     runs = store.runs(book_id)
     if not runs:

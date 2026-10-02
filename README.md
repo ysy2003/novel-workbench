@@ -39,7 +39,10 @@ NOVEL_MODEL=服务商提供的模型名称
 NOVEL_API_KEY=真实密钥仅在本机填写
 NOVEL_API_TIMEOUT=120
 NOVEL_MAX_OUTPUT_TOKENS=8192
+NOVEL_PLAN_REASONING=low
 ```
+
+`NOVEL_PLAN_REASONING` 只影响“规划本章”（包括自动连写里的规划）：`low`/`high`/`max` 发送顶层 `reasoning_effort`，`off` 用 DeepSeek 的 `thinking` 字段关闭思考，留空则不发送。2026-10-02 用 deepseek-flash 实测同一份第 5 章规划请求：默认 15.8 秒（思考 1384 tokens），low 8.9 秒（378），off 6.9 秒（0），计划结构与质量相近；默认模式波动大，连写时曾出现单次 60–90 秒。
 
 当前实现的是 Chat Completions 协议：Bearer 密钥、`model/messages/stream/max_tokens` 请求，以及 `choices[0].message.content` 响应。服务商必须支持此协议与这些参数；其他协议要增加适配器。没有预设服务商、默认模型或付费调用。提示词、返回结果和服务返回的 token 用量保存在本地调用记录中；密钥不入库。
 

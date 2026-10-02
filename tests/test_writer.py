@@ -202,3 +202,32 @@ def test_memory_task_asks_for_short_stable_entity_names_and_few_facts():
 def test_memory_parser_ignores_extra_top_level_fields():
     data = parse_memory('{"summary":"收到信件","facts":[],"summary_length":4}')
     assert data == {'summary': '收到信件', 'facts': []}
+
+
+def capture_bodies():
+    bodies = []
+
+    def serve(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=response('计划或正文。'))
+    return bodies, serve
+
+
+@pytest.mark.parametrize('setting, fields', [('low', {'reasoning_effort': 'low'}),
+                                             ('off', {'thinking': {'type': 'disabled'}})])
+def test_plan_requests_carry_the_configured_reasoning_setting_only(tmp_path, setting, fields):
+    db, book, chapter, rev = setup_story(tmp_path)
+    bodies, serve = capture_bodies()
+    cfg = ModelConfig('https://example.test/chat/completions', 'writing-model', 'test-secret', plan_reasoning=setting)
+    writer = Writer(db, ModelClient(cfg, httpx.MockTransport(serve)))
+    writer.run(chapter, 'plan')
+    writer.run(chapter, 'draft')
+    assert {k: bodies[0][k] for k in fields} == fields
+    assert not {'reasoning_effort', 'thinking'} & set(bodies[1])
+
+
+def test_plan_reasoning_setting_is_read_from_env_and_validated(monkeypatch):
+    monkeypatch.setenv('NOVEL_PLAN_REASONING', 'low')
+    assert ModelConfig.from_env().plan_reasoning == 'low'
+    with pytest.raises(ValidationError, match='NOVEL_PLAN_REASONING'):
+        ModelConfig('https://example.test/chat/completions', 'm', 'k', plan_reasoning='medium').validate()

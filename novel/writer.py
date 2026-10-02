@@ -122,7 +122,7 @@ class Writer:
                                       task, config.model, config.endpoint, messages)
         started = time.monotonic()
         try:
-            response = self.client.generate(messages)
+            response = self.client.generate(messages, reasoning=config.plan_reasoning if task == 'plan' else '')
         except ModelError as error:
             self.store.finish_run(run_id, '失败', error=str(error), elapsed=time.monotonic() - started)
             raise
