@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from novel.autowrite import BEAT_BATCH, LOOKAHEAD, MAX_CHAPTERS, auto_chapters, autowrite, capacity
-from novel import analysis, research
+from novel import analysis, research, topics
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -764,8 +764,8 @@ def show_research():
     older = [s['id'] for s in shots if s['id'] < current and s['stat_date'] != shot['stat_date']]
     previous = st.selectbox('对比', [None, *older], key=f'rank_compare_{current}',
                             index=1 if older else 0, format_func=lambda n: '不对比' if n is None else labels[n])
-    heat_tab, rising_tab, all_tab, breakdown_tab, report_tab, notes_tab = st.tabs(
-        ['题材热度', '新书冲榜', '全部榜单', '拆书分析', '题材报告', '书名标注'])
+    heat_tab, rising_tab, all_tab, breakdown_tab, report_tab, topics_tab, notes_tab = st.tabs(
+        ['题材热度', '新书冲榜', '全部榜单', '拆书分析', '题材报告', '选题方案', '书名标注'])
     rows = research.entries(store, current)
     with heat_tab:
         board = st.radio('榜单', ['新书榜', '阅读榜'], horizontal=True, key='heat_board')
@@ -804,10 +804,15 @@ def show_research():
         show_breakdown(rows)
     with report_tab:
         show_reports()
+    with topics_tab:
+        show_topics()
     with notes_tab:
         books = {}
         for r in rows:
             books.setdefault(r['book_id'], r)
+        if not books:
+            st.info('这份快照里没有书目。')
+            return
         picked = st.selectbox('选择一本书', list(books), key='note_book', format_func=lambda n:
                               f'{books[n]["channel"]}{books[n]["board"]} · {books[n]["category"]} · 第 {books[n]["rank"]} 名 · {entry_title(books[n])}')
         book_row = books[picked]
@@ -831,6 +836,80 @@ def show_research():
                            '链接': f'{research.BASE}/page/{n["book_id"]}'} for n in saved],
                          hide_index=True, width='stretch',
                          column_config={'链接': st.column_config.LinkColumn('链接', display_text='打开')})
+
+
+def show_draft_form(draft):
+    data, volume = draft['draft'], draft['draft']['第一卷']
+    key = lambda name: f'draft_{name}_{draft["id"]}'
+    st.markdown(f'#### 开书草稿（可修改）')
+    with st.form(f'draft_form_{draft["id"]}'):
+        title = st.text_input('书名', value=data['书名'], key=key('title'))
+        genre = st.text_input('题材', value=data['题材'], key=key('genre'))
+        premise = st.text_area('故事创意', value=topics.to_text(data['故事创意']), height=80, key=key('premise'))
+        bible = st.text_area('人物与世界设定', value=topics.to_text(data['人物与世界设定']), height=240, key=key('bible'))
+        outline = st.text_area('总纲（主线、暗线、伏笔表）', value=topics.to_text(data['总纲']), height=240, key=key('outline'))
+        style = st.text_area('写作偏好', value=topics.to_text(data['写作偏好']), height=100, key=key('style'))
+        a, b, c = st.columns([2, 1, 1])
+        volume_title = a.text_input('第一卷卷名', value=flat(volume['卷名']), key=key('volume_title'))
+        start = b.number_input('起始章', min_value=1, step=1, value=volume['起始章'], key=key('volume_start'))
+        end = c.number_input('结束章', min_value=1, step=1, value=volume['结束章'], key=key('volume_end'))
+        volume_outline = st.text_area('第一卷大纲', value=topics.to_text(volume['卷大纲']), height=140, key=key('volume_outline'))
+        st.caption('创建后进入“作品设定”。之后到“大纲”续写细纲，再用“自动连写”或逐章写作。')
+        if st.form_submit_button('用这份草稿创建作品', type='primary'):
+            try:
+                new_id = topics.create_book(store, draft['id'], title=title, genre=genre, premise=premise, bible=bible,
+                                            outline=outline, style=style, volume_title=volume_title,
+                                            volume_start=int(start), volume_end=int(end), volume_outline=volume_outline)
+                st.session_state['pending_book'] = new_id
+                notice(f'《{title}》已创建，第一卷也建好了。下一步到“大纲”续写细纲。')
+                st.rerun()
+            except ValidationError as error:
+                st.error(str(error))
+
+
+def show_topics():
+    reports = analysis.reports(store)
+    if not reports:
+        st.info('还没有题材报告。先在“拆书分析”生成分析卡，再在“题材报告”里生成报告。')
+        return
+    labels = {r['id']: f'{r["category"]} · {r["created_at"][:16].replace("T", " ")} UTC · {len(r["card_ids"])} 本' for r in reports}
+    report_id = st.selectbox('依据的题材报告', list(labels), format_func=labels.get, key='topic_report')
+    preferences = st.text_area('你的偏好（可选）', key='topic_preferences', height=80,
+                               placeholder='例如：想写女主；可以有金手指但要有代价；不写同人；每天能更 4000 字')
+    st.caption(f'生成 {topics.PROPOSAL_COUNT} 个差别明显的方案：至少一个走主流爽点路线，至少一个走报告里的差异化空间。'
+               '只借鉴结构和节奏，不用现有作品的书名、人物和桥段。')
+    if st.button(f'生成 {topics.PROPOSAL_COUNT} 个选题方案', type='primary', disabled=not config.ready, key='topic_run'):
+        try:
+            with st.spinner('正在生成选题方案…'):
+                topics.propose(store, ModelClient(config), report_id, preferences)
+            notice('选题方案已生成。')
+            st.rerun()
+        except (ValidationError, ModelError) as error:
+            st.error(str(error))
+    sets = [s for s in topics.proposal_sets(store) if s['report_id'] == report_id]
+    if not sets:
+        return
+    current = sets[0]
+    if current['preferences']:
+        st.caption(f'最近一组方案的偏好：{current["preferences"]}')
+    for index, proposal in enumerate(current['proposals']):
+        with st.expander(f'方案 {index + 1}：{flat(proposal["书名"])}', expanded=index == 0):
+            show_fields(proposal, topics.PROPOSAL_FIELDS[1:])
+            if st.button('用这个方案生成开书草稿', disabled=not config.ready, key=f'topic_draft_{current["id"]}_{index}'):
+                try:
+                    with st.spinner('正在生成开书草稿…'):
+                        topics.draft_book(store, ModelClient(config), current['id'], index)
+                    notice('开书草稿已生成，在下方修改后创建作品。')
+                    st.rerun()
+                except (ValidationError, ModelError) as error:
+                    st.error(str(error))
+    for draft in topics.drafts(store, current['id']):
+        if draft['book_id']:
+            st.caption(f'方案 {draft["index"] + 1} 的草稿已经开书。')
+            continue
+        st.caption(f'基于方案 {draft["index"] + 1}：{flat(current["proposals"][draft["index"]]["书名"])}')
+        show_draft_form(draft)
+        break
 
 
 def show_memory():
@@ -936,6 +1015,13 @@ def show_model():
     st.caption('当前适配 Chat Completions 协议；其他协议需增加适配器。密钥不写入数据库。每次生成前可以查看将发送的资料。')
     st.caption(f'当前配置：超时 {config.timeout:g} 秒；最大输出 {config.max_tokens} token；'
                f'规划本章的思考强度 {config.plan_reasoning or "默认"}（NOVEL_PLAN_REASONING）。没有设置价格，暂不估算金额。')
+    failed = analysis.failures(store, 10)
+    if failed:
+        with st.expander(f'选题研究的模型输出解析失败记录（最近 {len(failed)} 条）'):
+            st.caption('分析卡、题材报告、选题方案、开书草稿的输出没能按格式解析时，原始输出保存在这里，方便查原因。')
+            for item in failed:
+                st.markdown(f'**{item["task"]}** · {item["created_at"][:16].replace("T", " ")} UTC · {item["error"]}')
+                st.text_area('原始输出', item['output'], height=160, disabled=True, key=f'failure_{item["id"]}')
     st.markdown('### 调用记录')
     runs = store.runs(book_id)
     if not runs:

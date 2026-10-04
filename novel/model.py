@@ -114,9 +114,24 @@ def strip_fence(text):
     return text
 
 
+def load_json(text):
+    """解析模型输出里的 JSON：先按整段（可带代码块）解析，失败时取第一个完整的 JSON 对象，忽略前后多余的说明文字。"""
+    try:
+        return json.loads(strip_fence(text))
+    except ValueError:
+        pass
+    start = text.find('{')
+    while start >= 0:
+        try:
+            return json.JSONDecoder().raw_decode(text[start:])[0]
+        except ValueError:
+            start = text.find('{', start + 1)
+    raise ValueError('No JSON object found')
+
+
 def parse_memory(text):
     try:
-        data = json.loads(strip_fence(text))
+        data = load_json(text)
         if not isinstance(data, dict) or not {'summary', 'facts'} <= set(data):
             raise ValueError('Expected memory')
         summary, facts = validate_memory(data['summary'], data['facts'])
@@ -128,7 +143,7 @@ def parse_memory(text):
 def parse_beats(text, start=None, end=None):
     """解析 AI 细纲；给出 start–end 时要求章号正好连续覆盖这个范围。"""
     try:
-        data = json.loads(strip_fence(text))
+        data = load_json(text)
         if not isinstance(data, dict) or not isinstance(data.get('beats'), list):
             raise ValueError('Expected beats')
         rows = validate_beats(data['beats'], start or 1, end or 10 ** 6)

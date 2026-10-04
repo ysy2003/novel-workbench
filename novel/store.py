@@ -162,7 +162,20 @@ class Store:
                 id INTEGER PRIMARY KEY, category TEXT NOT NULL, card_ids TEXT NOT NULL, report TEXT NOT NULL,
                 model TEXT NOT NULL DEFAULT '', usage TEXT NOT NULL DEFAULT '{}', elapsed REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-            PRAGMA user_version=5;
+            CREATE TABLE IF NOT EXISTS proposals(
+                id INTEGER PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES reports(id), category TEXT NOT NULL,
+                preferences TEXT NOT NULL DEFAULT '', proposals TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+                usage TEXT NOT NULL DEFAULT '{}', elapsed REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            CREATE TABLE IF NOT EXISTS book_drafts(
+                id INTEGER PRIMARY KEY, proposal_id INTEGER NOT NULL REFERENCES proposals(id), idx INTEGER NOT NULL,
+                draft TEXT NOT NULL, book_id INTEGER REFERENCES books(id), model TEXT NOT NULL DEFAULT '',
+                usage TEXT NOT NULL DEFAULT '{}', elapsed REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            CREATE TABLE IF NOT EXISTS model_failures(
+                id INTEGER PRIMARY KEY, task TEXT NOT NULL, output TEXT NOT NULL, error TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            PRAGMA user_version=7;
             ''')
 
     @contextmanager

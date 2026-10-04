@@ -10,7 +10,7 @@ import json
 import time
 
 from novel import research
-from novel.model import strip_fence
+from novel.model import load_json
 from novel.store import ValidationError, clean_text
 
 FIELDS = ('为什么火', '书名套路', '简介写法', '开篇钩子', '核心卖点', '设定亮出', '主角人设', '冲突结构', '爽点分布',
@@ -32,7 +32,7 @@ REPORT_DIRECTIVE = ('你是网络小说编辑。下面是同一题材分类里�
                     '差异化空间（数组，这些书都没写到、可以切入的角度）、新书建议（数组，给准备在这个题材开新书的作者）。')
 
 
-def _normalize(value, field):
+def normalize(value, field):
     """把模型给出的各种形态整理成字符串、字符串列表或对象；空值写成“材料未体现”。"""
     if value is None:
         return '材料未体现'
@@ -43,19 +43,19 @@ def _normalize(value, field):
     if isinstance(value, str):
         return clean_text(value, field, 2000)
     if isinstance(value, dict):
-        return {str(key): _normalize(item, field) for key, item in list(value.items())[:20]}
+        return {str(key): normalize(item, field) for key, item in list(value.items())[:20]}
     if isinstance(value, list):
-        return [' · '.join(str(_normalize(part, field)) for part in item) if isinstance(item, list)
-                else _normalize(item, field) for item in value[:50]]
+        return [' · '.join(str(normalize(part, field)) for part in item) if isinstance(item, list)
+                else normalize(item, field) for item in value[:50]]
     raise ValueError(field)
 
 
 def _parse_fields(text, fields, message):
     try:
-        data = json.loads(strip_fence(text))
+        data = load_json(text)
         if not isinstance(data, dict) or not all(field in data for field in fields):
             raise ValueError('Missing fields')
-        return {field: _normalize(data[field], field) for field in fields}
+        return {field: normalize(data[field], field) for field in fields}
     except (TypeError, ValueError) as error:
         raise ValidationError(message) from error
 
@@ -68,7 +68,7 @@ def parse_report(text):
     return _parse_fields(text, REPORT_FIELDS, '题材报告格式不完整，请重新生成。')
 
 
-def _generate(client, messages):
+def call_model(client, messages):
     client.config.validate()
     started = time.monotonic()
     response = client.generate(messages)
@@ -77,9 +77,27 @@ def _generate(client, messages):
     return response, time.monotonic() - started
 
 
+def log_failure(store, task, output, error):
+    with store.connect(True) as c:
+        c.execute('INSERT INTO model_failures(task,output,error) VALUES(?,?,?)', (task, output, error))
+
+
+def failures(store, limit=20):
+    return store.all('SELECT * FROM model_failures ORDER BY id DESC LIMIT ?', (limit,))
+
+
+def parse_logged(store, task, response, parser):
+    """解析失败时保存模型原始输出，方便查原因，然后照常报错。"""
+    try:
+        return parser(response.text)
+    except ValidationError as error:
+        log_failure(store, task, response.text, f'{error}（结束原因：{response.finish_reason}）')
+        raise
+
+
 def _save_card(store, client, messages, title, category, source, sample_chars, book_id):
-    response, elapsed = _generate(client, messages)
-    card = parse_card(response.text)
+    response, elapsed = call_model(client, messages)
+    card = parse_logged(store, '分析卡', response, parse_card)
     with store.connect(True) as c:
         return c.execute('INSERT INTO analyses(book_id,title,category,source,sample_chars,card,model,usage,elapsed) '
                          'VALUES(?,?,?,?,?,?,?,?,?)',
@@ -139,9 +157,9 @@ def category_report(store, client, category):
     user_text = json.dumps(payload, ensure_ascii=False)
     if len(user_text) > 60000:
         raise ValidationError('分析卡内容超过 60000 字符，请删掉一部分分析卡后重试。')
-    response, elapsed = _generate(client, [{'role': 'system', 'content': REPORT_DIRECTIVE},
+    response, elapsed = call_model(client, [{'role': 'system', 'content': REPORT_DIRECTIVE},
                                            {'role': 'user', 'content': user_text}])
-    report = parse_report(response.text)
+    report = parse_logged(store, '题材报告', response, parse_report)
     with store.connect(True) as c:
         return c.execute('INSERT INTO reports(category,card_ids,report,model,usage,elapsed) VALUES(?,?,?,?,?,?)',
                          (category, json.dumps([c_['id'] for c_ in chosen]), json.dumps(report, ensure_ascii=False),

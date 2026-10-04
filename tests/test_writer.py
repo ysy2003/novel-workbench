@@ -236,3 +236,16 @@ def test_plan_reasoning_setting_is_read_from_env_and_validated(monkeypatch):
 def test_memory_task_keeps_identity_and_knowledge_from_being_overwritten():
     assert '全名' in TASKS['memory']
     assert '知晓：' in TASKS['memory']
+
+
+@pytest.mark.parametrize('text', ['{"a": 1}', '```json\n{"a": 1}\n```', '以下是结果：\n```json\n{"a": 1}\n```\n希望有帮助。',
+                                  '{"a": 1}\n说明：以上为分析。'])
+def test_json_is_found_inside_extra_text(text):
+    from novel.model import load_json
+    assert load_json(text) == {'a': 1}
+
+
+def test_text_without_json_still_fails():
+    from novel.model import load_json
+    with pytest.raises(ValueError):
+        load_json('这本书很好看。')

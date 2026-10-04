@@ -5,7 +5,7 @@ from streamlit.testing.v1 import AppTest
 
 import json
 
-from novel import analysis, research
+from novel import analysis, research, topics
 from novel.store import Store
 
 
@@ -226,6 +226,31 @@ def test_research_breakdown_and_report_tabs_show_saved_cards_and_reports(app):
     assert any(b.label == '抓取这一页的书籍详情' for b in at.button)
     assert any('盗墓：八岁创雷法' in e.label for e in at.expander)
     assert any('悬疑灵异' in m.value and '题材报告' in m.value for m in at.markdown)
+
+
+def test_topic_tab_creates_a_new_book_from_an_edited_draft(app):
+    at, db = app
+    new_book(at)
+    proposal = {field: f'{field}内容' for field in topics.PROPOSAL_FIELDS}
+    draft = {'书名': '夜班规则簿', '题材': '悬疑脑洞', '故事创意': '创意', '人物与世界设定': '设定', '总纲': '总纲',
+             '写作偏好': '短句', '第一卷': {'卷名': '第一夜', '起始章': 1, '结束章': 30, '卷大纲': '卷纲'}}
+    with db.connect(True) as c:
+        report = c.execute('INSERT INTO reports(category,card_ids,report) VALUES(?,?,?)',
+                           ('悬疑脑洞', '[1,2]', json.dumps({f: '内容' for f in analysis.REPORT_FIELDS}, ensure_ascii=False))).lastrowid
+        proposal_id = c.execute('INSERT INTO proposals(report_id,category,proposals) VALUES(?,?,?)',
+                                (report, '悬疑脑洞', json.dumps([proposal] * 3, ensure_ascii=False))).lastrowid
+        draft_id = c.execute('INSERT INTO book_drafts(proposal_id,idx,draft) VALUES(?,?,?)',
+                             (proposal_id, 0, json.dumps(draft, ensure_ascii=False))).lastrowid
+    research.save_snapshot(db, '10-04 24:00', 0, [], [])
+    at.radio('section').set_value('选题研究').run()
+    assert not at.exception
+    assert any(e.label.startswith('方案 1') for e in at.expander)
+    at.text_input(f'draft_title_{draft_id}').input('作者改过的书名')
+    button(at, '用这份草稿创建作品').click().run()
+    assert not at.exception
+    assert [b['title'] for b in db.books()][0] == '作者改过的书名'
+    assert db.volumes(db.books()[0]['id'])[0]['title'] == '第一夜'
+    assert at.radio('section').value == '作品设定'
 
 
 def test_settings_form_does_not_overwrite_another_windows_changes(app):

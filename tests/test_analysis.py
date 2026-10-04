@@ -140,3 +140,19 @@ def test_card_parser_tolerates_objects_numbers_nested_lists_and_nulls():
     assert card['节奏'] == '3'
     assert card['爽点分布'] == ['第2章 · 识破假规则']
     assert card['书名套路'] == '材料未体现'
+
+
+def test_unparseable_output_is_kept_for_diagnosis(db):
+    store_details(db)
+    with pytest.raises(ValidationError):
+        analysis.analyze_book(db, client(text='抱歉，我无法按格式输出。'), '111', category='悬疑灵异')
+    failure = analysis.failures(db)[0]
+    assert failure['task'] == '分析卡' and failure['output'] == '抱歉，我无法按格式输出。'
+    assert '格式不完整' in failure['error']
+
+
+def test_card_wrapped_in_chatter_is_accepted(db):
+    store_details(db)
+    text = '好的，下面是分析：\n```json\n' + json.dumps(CARD, ensure_ascii=False) + '\n```\n以上。'
+    analysis.analyze_book(db, client(text=text), '111', category='悬疑灵异')
+    assert analysis.cards(db)[0]['card']['核心卖点'] == '规则怪谈加推理'
