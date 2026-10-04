@@ -394,24 +394,29 @@ class Store:
                           (chapter['book_id'], chapter['number']))
             c.execute('UPDATE books SET context_version=context_version+1 WHERE id=?', (chapter['book_id'],))
 
+    @staticmethod
+    def current_facts(memories):
+        """按章节顺序合并各章事实，同一对象的同一属性取最新一章，并带上来源。"""
+        current = {}
+        for memory in memories:
+            for fact in memory['facts']:
+                current[(fact['entity'], fact['attribute'])] = {
+                    **fact, 'chapter_number': memory['number'], 'revision_id': memory['revision_id']}
+        return list(current.values())
+
     def context(self, chapter_id):
         chapter = self.chapter(chapter_id)
         with self.connect() as c:
             self._check_previous(c, chapter)
         book = self.book(chapter['book_id'])
-        current = {}
         memories = [m for m in self.memory(book['id']) if m['number'] < chapter['number']]
-        for memory in memories:
-            for fact in memory['facts']:
-                current[(fact['entity'], fact['attribute'])] = {
-                    **fact, 'chapter_number': memory['number'], 'revision_id': memory['revision_id']}
         previous = self.all('SELECT ch.number, r.id AS revision_id, r.body FROM chapters ch '
                             'JOIN revisions r ON r.id=ch.finalized_revision_id '
                             'WHERE ch.book_id=? AND ch.number<? ORDER BY ch.number DESC LIMIT 1',
                             (book['id'], chapter['number']))
         number = chapter['number']
         nearby = {b['number']: b for b in self.beats(book['id']) if number <= b['number'] <= number + NEXT_BEATS}
-        return {'book': book, 'chapter_number': number, 'facts': list(current.values()),
+        return {'book': book, 'chapter_number': number, 'facts': self.current_facts(memories),
                 'previous_chapter': previous[0] if previous else None,
                 'volume': self.volume_for(book['id'], number),
                 'volumes': [{k: v[k] for k in ('number', 'title', 'start_chapter', 'end_chapter')}

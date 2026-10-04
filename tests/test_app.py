@@ -167,8 +167,20 @@ def test_autowrite_section_shows_how_far_it_can_write_and_needs_a_model(app):
     db.save_beats(1, 1, 30, [{'number': n, 'title': f'细纲{n}', 'brief': '要点'} for n in (1, 2, 3)])
     at.radio('section').set_value('自动连写').run()
     assert not at.exception
-    assert any('连续 3 章有细纲' in c.value for c in at.caption)
+    assert any('现有连续细纲 3 章，不够时会自动续写' in c.value for c in at.caption)
     assert button(at, '开始自动连写').disabled
+
+
+def test_autowrite_without_beats_can_start_only_when_auto_beats_is_on(app):
+    at, db = app
+    new_book(at)
+    db.save_volume(1, 1, '第一夜', 1, 30, '')
+    at.radio('section').set_value('自动连写').run()
+    assert at.checkbox('auto_beats_1').value is True
+    assert not any('请先到“大纲”续写细纲' in i.value for i in at.info)
+    at.checkbox('auto_beats_1').uncheck().run()
+    assert not at.exception
+    assert any('请先到“大纲”续写细纲' in i.value for i in at.info)
 
 
 def test_settings_form_does_not_overwrite_another_windows_changes(app):

@@ -231,3 +231,8 @@ def test_plan_reasoning_setting_is_read_from_env_and_validated(monkeypatch):
     assert ModelConfig.from_env().plan_reasoning == 'low'
     with pytest.raises(ValidationError, match='NOVEL_PLAN_REASONING'):
         ModelConfig('https://example.test/chat/completions', 'm', 'k', plan_reasoning='medium').validate()
+
+
+def test_memory_task_keeps_identity_and_knowledge_from_being_overwritten():
+    assert '全名' in TASKS['memory']
+    assert '知晓：' in TASKS['memory']

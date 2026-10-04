@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from novel.autowrite import MAX_CHAPTERS, auto_chapters, autowrite, capacity
+from novel.autowrite import BEAT_BATCH, LOOKAHEAD, MAX_CHAPTERS, auto_chapters, autowrite, capacity
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -542,28 +542,32 @@ def show_autowrite():
     st.write('按细纲从下一章开始连续写作：每章自动规划、写初稿、检查、提取记忆并定稿。'
              '任何一步不通过就停下，出问题的那一章留给你处理。已有章节不会被改动。')
     cap = capacity(store, book_id)
+    auto_beats = st.checkbox('细纲不够时自动续写', value=True, key=f'auto_beats_{book_id}',
+                             help=f'每写一章前，如果从这一章起连续细纲不足 {LOOKAHEAD} 章，就续写 {BEAT_BATCH} 章细纲并直接采用；'
+                                  '只填空位，不覆盖已有细纲，也不超出分卷。')
     if cap['unfinished']:
         st.warning(f'第 {cap["unfinished"][0]} 章还没定稿。先在“章节工作区”定稿后才能连写。')
-    elif not cap['available']:
-        st.info(f'第 {cap["next"]} 章还没有细纲。请先到“大纲”续写细纲。')
+    elif not cap['available'] and not auto_beats:
+        st.info(f'第 {cap["next"]} 章还没有细纲。请先到“大纲”续写细纲，或打开“细纲不够时自动续写”。')
     else:
-        st.caption(f'可以从第 {cap["next"]} 章开始，连续 {cap["available"]} 章有细纲。')
-    limit = max(1, min(MAX_CHAPTERS, cap['available']))
+        st.caption(f'可以从第 {cap["next"]} 章开始；现有连续细纲 {cap["available"]} 章'
+                   + ('，不够时会自动续写。' if auto_beats else '。'))
+    limit = MAX_CHAPTERS if auto_beats else max(1, min(MAX_CHAPTERS, cap['available']))
     count = st.number_input('连写章数', min_value=1, max_value=limit, value=min(3, limit), step=1,
-                            key=f'auto_count_{book_id}')
+                            key=f'auto_count_{book_id}_{auto_beats}')
     target = st.number_input('每章目标字数', min_value=500, max_value=12000, value=2000, step=100,
                              key=f'auto_target_{book_id}')
     st.caption('检查标准：字数在目标的一半到两倍之间，正文不出现“作者备注”，模型输出完整，记忆格式正确。'
                '每章约 1–1.5 分钟；运行期间不要关闭或刷新页面，中途断开时已完成的章节会保留。')
     if not config.ready:
         st.caption('配置模型后即可使用。请到“模型与记录”查看接入方法。')
-    ready = config.ready and not cap['unfinished'] and cap['available'] > 0
+    ready = config.ready and not cap['unfinished'] and (auto_beats or cap['available'] > 0)
     if st.button('开始自动连写', type='primary', disabled=not ready, key=f'auto_run_{book_id}'):
         last = cap['next'] + int(count) - 1
         with st.status(f'正在连写第 {cap["next"]}–{last} 章…', expanded=True) as status:
             try:
                 result = autowrite(store, Writer(store, ModelClient(config)), book_id, int(count), int(target),
-                                   lambda number, step: st.write(f'第 {number} 章：{step}'))
+                                   lambda number, step: st.write(f'第 {number} 章：{step}'), auto_beats=auto_beats)
                 stopped = result['stopped']
                 status.update(label=f'第 {stopped["number"]} 章在“{stopped["step"]}”停下' if stopped
                               else f'完成 {len(result["done"])} 章', state='error' if stopped else 'complete')
@@ -582,6 +586,11 @@ def show_autowrite():
             st.dataframe([{'章节': f'第 {d["number"]} 章', '标题': d['title'], '字数': d['chars'],
                            '记忆条数': d['facts'], '耗时（秒）': round(d['elapsed'])} for d in result['done']],
                          hide_index=True, width='stretch')
+        if result.get('beats'):
+            st.caption('本次自动续写了细纲：' + '、'.join(f'第 {b["start"]}–{b["end"]} 章' for b in result['beats'])
+                       + '，可以到“大纲”抽查或修改。')
+        for warning in result.get('warnings', []):
+            st.warning(warning)
         if result['stopped']:
             stopped = result['stopped']
             st.warning(f'第 {stopped["number"]} 章停在“{stopped["step"]}”：{stopped["reason"]}。'

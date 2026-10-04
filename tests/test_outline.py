@@ -166,3 +166,21 @@ def test_parse_beats_accepts_code_fences_and_extra_fields():
     assert parse_beats(text, 3, 3) == [{'number': 3, 'title': '灯牌', 'brief': '林默不关灯牌'}]
     with pytest.raises(ValidationError):
         parse_beats(text, 3, 4)
+
+
+def test_beat_generation_sends_established_facts_about_mentioned_characters(db):
+    book = book_with_volumes(db)
+    db.save_beats(book, 1, 30, [beat(1, '交接本', '周姐交接时回避问题')])
+    chapter = db.create_chapter(book, '交接本')
+    revision = db.save_revision(chapter, '交接本', '', '周姐签下“周玲”。', db.chapter(chapter)['current_revision_id'])
+    db.finalize(chapter, revision, '周姐交接。', [{'entity': '周姐', 'attribute': '全名', 'value': '周玲'},
+                                              {'entity': '路人', 'attribute': '状态', 'value': '路过'}],
+                db.book(book)['context_version'])
+    for number in range(2, 6):
+        filler = db.create_chapter(book, f'第{number}章')
+        rev = db.save_revision(filler, f'第{number}章', '', '过场。', db.chapter(filler)['current_revision_id'])
+        db.finalize(filler, rev, '过场。', [], db.book(book)['context_version'])
+    _, _, _, messages = Writer(db, ModelClient(ModelConfig())).prepare_beats(book, 3)
+    payload = json.loads(messages[1]['content'])
+    assert [(f['entity'], f['value']) for f in payload['历史事实']] == [('周姐', '周玲')]
+    assert '历史事实' in messages[0]['content']

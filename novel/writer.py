@@ -12,7 +12,7 @@ TASKS = {
     'draft': '依据已确认设定与本章计划写小说正文。开头承接“上一章结尾”，不要复述它。计划里“作者备注”开头的内容、大纲里的暗线和真相只用于把握方向，不能写进正文；正文只写视角人物此刻能感知和知道的事。“后续细纲”只用于铺垫，不要提前写后面章节的情节。只输出正文，不加章节标题、解释或 Markdown 代码块。避免复述设定和空泛总结。',
     'rewrite': '按作者修改要求重写正文，保持没有要求改动的剧情事实与叙述视角。只输出正文。',
     'review': '检查当前正文与已确认设定和历史事实的一致性。逐条给出问题位置、正文原句、历史依据的章节、建议。区分明确矛盾与信息不足，不把自己的猜测写成事实；没有发现问题时如实说明。',
-    'memory': '从当前正文提取本章摘要和需要供后续章节使用的事实变化。只提取正文里实际发生或明确揭露的事实，不写猜测和伏笔用途。对象名称要简短、稳定：人物用姓名或固定称呼，物品和地点用最短的通用叫法（如“守则”“冷柜”“雨衣男人”），优先沿用历史事实里已有的对象名称。最多 15 条，只记录会影响后续章节的状态变化和新揭露的信息，不记录一次性的环境描写。同一对象和属性只输出最终状态。人物知道的秘密与世界真相分开记录。摘要 300 字以内。只输出 JSON：{"summary":"本章发生了什么","facts":[{"entity":"人物/物品/事件名称","attribute":"状态/位置/知晓信息/伏笔名称等具体属性","value":"当前事实"}]}。',
+    'memory': '从当前正文提取本章摘要和需要供后续章节使用的事实变化。只提取正文里实际发生或明确揭露的事实，不写猜测和伏笔用途。对象名称要简短、稳定：人物用姓名或固定称呼，物品和地点用最短的通用叫法（如“守则”“冷柜”“雨衣男人”），优先沿用历史事实里已有的对象名称。最多 15 条，只记录会影响后续章节的状态变化和新揭露的信息，不记录一次性的环境描写。同一对象和属性只输出最终状态。人物首次出现或首次揭露的全名、身份、关系单独记一条，对象写这个人，属性写“全名”“身份”或“与某人的关系”。人物新得知的信息用“知晓：具体主题”作属性，不同主题分开记，避免覆盖之前知道的事。人物知道的秘密与世界真相分开记录。摘要 300 字以内。只输出 JSON：{"summary":"本章发生了什么","facts":[{"entity":"人物/物品/事件名称","attribute":"状态/位置/知晓信息/伏笔名称等具体属性","value":"当前事实"}]}。',
 }
 
 
@@ -56,7 +56,8 @@ def tail_text(text, limit=PREVIOUS_ENDING_CHARS):
 def beats_directive(start, end):
     return (f'为第 {start}–{end} 章写章节细纲，接在“本卷已有细纲”和前文之后。每章给出标题和要点：'
             '要点 150 字以内，写清本章发生什么、推进哪条明线或暗线、埋设或回收哪个伏笔、结尾钩子。'
-            '遵循总纲和“本卷大纲”的方向与节奏，不重复已经写过的情节。读者此刻不该知道的内容在要点里以“作者备注：”标出。'
+            '遵循总纲和“本卷大纲”的方向与节奏，不重复已经写过的情节；人物姓名、身份和已经发生的事与“历史事实”保持一致。'
+            '读者此刻不该知道的内容在要点里以“作者备注：”标出。'
             f'只输出 JSON：{{"beats":[{{"number":章号,"title":"标题","brief":"要点"}}]}}，章号从 {start} 到 {end} 连续。')
 
 
@@ -150,13 +151,19 @@ class Writer:
         instructions = clean_text(instructions, '本次要求', 6000)
         start, end, volume = self.store.beat_window(book_id, count)
         book = self.store.book(book_id)
-        summaries = [{'chapter_number': m['number'], 'summary': m['summary']}
-                     for m in self.store.memory(book_id) if m['number'] < start][-6:]
+        memories = [m for m in self.store.memory(book_id) if m['number'] < start]
+        summaries = [{'chapter_number': m['number'], 'summary': m['summary']} for m in memories[-6:]]
         existing = [b for b in self.store.beats(book_id)
                     if volume['start_chapter'] <= b['number'] <= volume['end_chapter']]
+        query = '\n'.join([book['outline'], volume['outline'], instructions,
+                           *(b['title'] + b['brief'] for b in existing), *(s['summary'] for s in summaries)])
+        facts, omitted = select_facts(self.store.current_facts(memories), query,
+                                      [m['number'] for m in memories][-RECENT_CHAPTERS:])
         payload = {'故事': {k: book[k] for k in BOOK_FIELDS},
                    '分卷概览': [{k: v[k] for k in VOLUME_FIELDS} for v in self.store.volumes(book_id)],
                    '本卷大纲': volume_brief(volume), '本卷已有细纲': existing, '近期章节摘要': summaries,
+                   '历史事实': facts,
+                   '历史事实范围': f'只含总纲、卷大纲、已有细纲和近期摘要里提到的对象及最近 {RECENT_CHAPTERS} 章更新的事实，另有 {omitted} 条未发送。',
                    '续写范围': {'start': start, 'end': end}, '作者本次要求': instructions}
         user_text = json.dumps(payload, ensure_ascii=False)
         if len(user_text) > 60000:

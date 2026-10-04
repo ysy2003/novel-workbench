@@ -30,14 +30,22 @@ def finalize_manually(db, book, title):
     return chapter
 
 
-def model(drafts=(LONG_DRAFT,), status=200):
+def model(drafts=(LONG_DRAFT,), status=200, beats='ok', calls=None):
     drafts = list(drafts)
 
     def serve(request):
         if status != 200:
             return httpx.Response(status, text='error')
-        system = json.loads(request.content)['messages'][0]['content']
-        if TASKS['plan'] in system:
+        messages = json.loads(request.content)['messages']
+        system = messages[0]['content']
+        if calls is not None:
+            calls.append(system)
+        if '章节细纲' in system:
+            window = json.loads(messages[1]['content'])['续写范围']
+            rows = [{'number': n, 'title': f'AI细纲{n}', 'brief': f'第{n}章AI要点'}
+                    for n in range(window['start'], window['end'] + 1)]
+            text = json.dumps({'beats': rows if beats == 'ok' else rows[1:]}, ensure_ascii=False)
+        elif TASKS['plan'] in system:
             text = '场景一：林川值夜班。'
         elif TASKS['draft'] in system:
             text = drafts.pop(0) if len(drafts) > 1 else drafts[0]
@@ -50,8 +58,8 @@ def model(drafts=(LONG_DRAFT,), status=200):
     return ModelClient(config, httpx.MockTransport(serve))
 
 
-def run(db, book, count, client=None):
-    return autowrite(db, Writer(db, client or model()), book, count, target_words=2000)
+def run(db, book, count, client=None, auto_beats=False):
+    return autowrite(db, Writer(db, client or model()), book, count, target_words=2000, auto_beats=auto_beats)
 
 
 def test_writes_and_finalizes_new_chapters_without_touching_existing_ones(db):
@@ -113,3 +121,57 @@ def test_draft_check_flags_length_and_author_notes():
     assert check_draft('字' * 2000, 2000) == []
     assert check_draft('字' * 900, 2000) and check_draft('字' * 4100, 2000)
     assert any('作者备注' in p for p in check_draft('字' * 2000 + '作者备注：', 2000))
+
+
+def beat_numbers(db, book):
+    return [b['number'] for b in db.beats(book)]
+
+
+def test_generates_beats_when_none_are_left_and_keeps_writing(db):
+    book = book_with_beats(db, [])
+    result = run(db, book, 2, auto_beats=True)
+    assert result['stopped'] is None
+    assert result['beats'] == [{'start': 1, 'end': 10}]
+    assert beat_numbers(db, book) == list(range(1, 11))
+    assert [(c['number'], c['title']) for c in db.chapters(book)] == [(1, 'AI细纲1'), (2, 'AI细纲2')]
+
+
+def test_tops_up_beats_to_keep_three_upcoming_beats_and_never_overwrites(db):
+    book = book_with_beats(db, [1, 2, 3])
+    result = run(db, book, 1, auto_beats=True)
+    assert result['beats'] == [{'start': 4, 'end': 13}]
+    assert [b['title'] for b in db.beats(book)][:3] == ['细纲1', '细纲2', '细纲3']
+    assert db.chapters(book)[0]['title'] == '细纲1'
+
+
+def test_failed_top_up_is_a_warning_when_the_chapter_already_has_a_beat(db):
+    book = book_with_beats(db, [1, 2])
+    calls = []
+    result = run(db, book, 2, model(beats='bad', calls=calls), auto_beats=True)
+    assert result['stopped'] is None
+    assert [c['number'] for c in result['done']] == [1, 2]
+    assert len(result['warnings']) == 1 and result['beats'] == []
+    assert sum('章节细纲' in system for system in calls) == 1
+
+
+def test_stops_when_beats_cannot_be_generated_for_a_chapter_without_one(db):
+    book = book_with_beats(db, [])
+    result = run(db, book, 1, model(beats='bad'), auto_beats=True)
+    assert result['stopped']['step'] == '续写细纲'
+    assert db.chapters(book) == []
+
+
+def test_stops_when_no_volume_covers_the_next_chapter(db):
+    book = db.create_book('没有下一卷')
+    db.save_volume(book, 1, '第一夜', 1, 1, '')
+    db.save_beats(book, 1, 1, [{'number': 1, 'title': '细纲1', 'brief': '要点'}])
+    result = run(db, book, 2, auto_beats=True)
+    assert [c['number'] for c in result['done']] == [1]
+    assert result['stopped']['number'] == 2 and '分卷' in result['stopped']['reason']
+
+
+def test_stops_at_a_gap_in_beats_that_top_up_cannot_fill(db):
+    book = book_with_beats(db, [1, 2, 5, 6, 7, 8])
+    result = run(db, book, 3, auto_beats=True)
+    assert [c['number'] for c in result['done']] == [1, 2]
+    assert result['stopped']['number'] == 3 and '第 3 章' in result['stopped']['reason']

@@ -12,6 +12,8 @@ from novel.store import ValidationError
 
 AUTO_SOURCE = '自动连写'
 MAX_CHAPTERS = 10
+LOOKAHEAD = 4  # 本章加后面 3 章：写作时会参考后续 3 章细纲
+BEAT_BATCH = 10
 
 
 class Stop(Exception):
@@ -44,6 +46,39 @@ def capacity(store, book_id):
         available += 1
     return {'next': start, 'available': available,
             'unfinished': [ch['number'] for ch in chapters if not ch['finalized_revision_id']]}
+
+
+def consecutive_beats(numbers, start):
+    count = 0
+    while start + count in numbers:
+        count += 1
+    return count
+
+
+def _top_up_beats(store, writer, book_id, number, state):
+    """本章起连续细纲不足 LOOKAHEAD 章时续写一批并直接采用（只填空位）。"""
+    numbers = {b['number'] for b in store.beats(book_id)}
+    ahead = consecutive_beats(numbers, number)
+    later = sorted(n for n in numbers if n > number + ahead)
+    if later:  # 中间有空洞：续写只会接在最后面，补不上
+        if not ahead:
+            raise Stop('续写细纲', f'第 {number} 章没有细纲，但后面已有第 {later[0]} 章的细纲；'
+                                  f'自动续写只能接在最后面，请到“大纲”补上第 {number} 章。')
+        return
+    if ahead >= LOOKAHEAD or (state['top_up_failed'] and ahead):
+        return
+    try:
+        generated = writer.run_beats(book_id, BEAT_BATCH)
+        run = store.run(generated['run_id'])
+        if not generated['candidates']:
+            raise ValidationError(f'{run["status"]}：{run["error"]}' if run['error'] else run['status'])
+        store.adopt_beats(book_id, generated['candidates'], run['context_version'])
+        state['beats'].append({'start': generated['start'], 'end': generated['end']})
+    except (ModelError, ValidationError) as error:
+        if not ahead:
+            raise Stop('续写细纲', str(error)) from None
+        state['top_up_failed'] = True
+        state['warnings'].append(f'写第 {number} 章前续写细纲没有成功（{error}）；本章已有细纲，继续写，本次不再重试。')
 
 
 def auto_chapters(store, book_id):
@@ -101,22 +136,28 @@ def _write_chapter(store, writer, book_id, beat, target_words, progress):
             'elapsed': time.monotonic() - started}
 
 
-def autowrite(store, writer, book_id, count, target_words=2000, on_progress=None):
+def autowrite(store, writer, book_id, count, target_words=2000, on_progress=None, auto_beats=False):
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_CHAPTERS:
         raise ValidationError(f'一次连写 1–{MAX_CHAPTERS} 章。')
     cap = capacity(store, book_id)
     if cap['unfinished']:
         raise ValidationError(f'第 {cap["unfinished"][0]} 章还没定稿。自动连写只接着已定稿的章节往后写，请先处理它。')
-    if cap['available'] < count:
+    if not auto_beats and cap['available'] < count:
         raise ValidationError(f'从第 {cap["next"]} 章起只有 {cap["available"]} 章连续的细纲，'
                               '请先到“大纲”续写细纲，或减少连写章数。')
     writer.client.config.validate()
-    beats = {b['number']: b for b in store.beats(book_id)}
     progress = on_progress or (lambda number, step: None)
-    result = {'done': [], 'stopped': None}
+    state = {'beats': [], 'warnings': [], 'top_up_failed': False}
+    result = {'done': [], 'stopped': None, 'beats': state['beats'], 'warnings': state['warnings']}
     for number in range(cap['next'], cap['next'] + count):
         try:
-            result['done'].append(_write_chapter(store, writer, book_id, beats[number], target_words, progress))
+            if auto_beats:
+                progress(number, '检查细纲')
+                _top_up_beats(store, writer, book_id, number, state)
+            beat = next((b for b in store.beats(book_id) if b['number'] == number), None)
+            if not beat:
+                raise Stop('续写细纲', f'第 {number} 章没有细纲。')
+            result['done'].append(_write_chapter(store, writer, book_id, beat, target_words, progress))
         except Stop as stop:
             result['stopped'] = {'number': number, 'step': stop.step, 'reason': str(stop)}
             break
