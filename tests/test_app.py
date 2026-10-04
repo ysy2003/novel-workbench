@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from novel import research
 from novel.store import Store
 
 
@@ -181,6 +182,26 @@ def test_autowrite_without_beats_can_start_only_when_auto_beats_is_on(app):
     at.checkbox('auto_beats_1').uncheck().run()
     assert not at.exception
     assert any('请先到“大纲”续写细纲' in i.value for i in at.info)
+
+
+def test_research_section_shows_snapshots_and_saves_title_notes(app):
+    at, db = app
+    new_book(at)
+    at.radio('section').set_value('选题研究').run()
+    assert not at.exception
+    assert any('还没有榜单数据' in i.value for i in at.info)
+    row = {'channel': '男频', 'board': '新书榜', 'category_id': 751, 'category': '悬疑灵异', 'rank': 1,
+           'book_id': '111', 'title': '盗墓□八创雷', 'title_complete': 0, 'reading': 134000, 'status': '连载中',
+           'latest_chapter': '第79章 夜班', 'updated_at': '2026-10-04 08:36'}
+    research.save_snapshot(db, '10-03 24:00', 1, [{**row, 'reading': 100000}], [])
+    research.save_snapshot(db, '10-04 24:00', 1, [row], [])
+    at.run()
+    assert not at.exception
+    assert any('统计至 10-04 24:00' in c.value for c in at.caption)
+    at.text_input('note_title_111').input('盗墓：八卦创雷')
+    button(at, '保存标注').click().run()
+    assert not at.exception
+    assert research.notes(db)[0]['title'] == '盗墓：八卦创雷'
 
 
 def test_settings_form_does_not_overwrite_another_windows_changes(app):

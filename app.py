@@ -10,6 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from novel.autowrite import BEAT_BATCH, LOOKAHEAD, MAX_CHAPTERS, auto_chapters, autowrite, capacity
+from novel import research
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -85,7 +86,7 @@ with st.sidebar:
         if st.session_state.get('book_pick') not in book_names:
             st.session_state['book_pick'] = books[0]['id']
         book_id = st.selectbox('当前作品', list(book_names), format_func=book_names.get, key='book_pick')
-        section = st.radio('工作区', ['作品设定', '大纲', '章节工作区', '自动连写', '故事记忆', '存稿与导出', '模型与记录'], key='section')
+        section = st.radio('工作区', ['作品设定', '大纲', '章节工作区', '自动连写', '故事记忆', '存稿与导出', '选题研究', '模型与记录'], key='section')
         st.divider()
         with st.expander('＋ 新建作品'):
             book_creation('sidebar_create')
@@ -606,6 +607,109 @@ def show_autowrite():
             st.text_area('正文', chapter['body'], height=320, disabled=True, key=f'auto_body_{chapter["id"]}')
 
 
+def wan(value):
+    return None if value is None else round(value / 10000, 1)
+
+
+def entry_title(row):
+    return row.get('note_title') or row['title']
+
+
+def show_research():
+    st.title('选题研究')
+    st.write('抓取番茄排行榜的公开数据，看哪类题材热、哪本新书在冲。书名、作者、简介用了字体反爬，这里不解码，'
+             '残缺的字显示为 □；感兴趣的书点链接在浏览器里看，再到“书名标注”里记下来。')
+    shots = research.snapshots(store)
+    if st.button('抓取最新榜单', type='primary', key='fetch_rank'):
+        with st.status('正在抓取番茄排行榜…', expanded=True) as status:
+            try:
+                _, summary = research.fetch_snapshot(
+                    store, progress=lambda done, total, name: status.update(label=f'正在抓取 {done}/{total}：{name}'))
+                status.update(label=f'完成：{summary["pages"]} 页、{summary["entries"]} 条，失败 {len(summary["failed"])} 页',
+                              state='complete' if not summary['failed'] else 'error')
+                if shots and shots[0]['stat_date'] == summary['stat_date']:
+                    notice('这份快照与上一份统计日期相同。排行榜每天下午 3 点前更新上一日的数据。')
+                st.rerun()
+            except research.ResearchError as error:
+                status.update(label='抓取失败', state='error')
+                st.error(str(error))
+    st.caption('共 74 个榜单页，每页间隔 2 秒，约 3 分钟；只抓公开榜单页，不抓正文。')
+    if not shots:
+        st.info('还没有榜单数据。点上面的按钮抓取一次。')
+        return
+    labels = {s['id']: f'统计至 {s["stat_date"]} · 抓取于 {s["fetched_at"][:16].replace("T", " ")} UTC' for s in shots}
+    current = st.selectbox('快照', list(labels), format_func=labels.get, key='rank_snapshot')
+    shot = next(s for s in shots if s['id'] == current)
+    failed = json.loads(shot['failed'])
+    st.caption(f'统计至 {shot["stat_date"]}：{shot["pages"]} 页、{shot["entries"]} 条'
+               + (f'；{len(failed)} 页抓取失败' if failed else '') + '。')
+    older = [s['id'] for s in shots if s['id'] < current and s['stat_date'] != shot['stat_date']]
+    previous = st.selectbox('对比', [None, *older], key=f'rank_compare_{current}',
+                            index=1 if older else 0, format_func=lambda n: '不对比' if n is None else labels[n])
+    heat_tab, rising_tab, all_tab, notes_tab = st.tabs(['题材热度', '新书冲榜', '全部榜单', '书名标注'])
+    rows = research.entries(store, current)
+    with heat_tab:
+        board = st.radio('榜单', ['新书榜', '阅读榜'], horizontal=True, key='heat_board')
+        st.caption('按分类合计前 10 名的在读人数。新书榜更能看出当下什么题材在起量。')
+        st.dataframe([{'频道': h['channel'], '分类': h['category'], '前10在读合计（万）': wan(h['total']),
+                       '变化（万）': wan(h['change']), '变化%': h['change_pct']}
+                      for h in research.category_heat(store, current, previous) if h['board'] == board],
+                     hide_index=True, width='stretch')
+    with rising_tab:
+        board = st.radio('榜单', ['新书榜', '阅读榜'], horizontal=True, key='rising_board')
+        if previous is None:
+            st.info('需要另一天的快照才能计算增长。下面先按在读人数排列。')
+            ranked = sorted((r for r in rows if r['board'] == board), key=lambda r: -(r['reading'] or 0))
+            ranked = [{**r, 'growth': None, 'previous_rank': None, 'chapters_gained': None, 'is_new': False} for r in ranked]
+        else:
+            ranked = [r for r in research.rising_books(store, current, previous) if r['board'] == board]
+        st.dataframe([{'分类': r['category'], '排名': r['rank'], '上次排名': '新上榜' if r['is_new'] else r['previous_rank'],
+                       '书名': entry_title(r), '在读（万）': wan(r['reading']), '增长（万）': wan(r['growth']),
+                       '新增章节': r['chapters_gained'], '最新章节': r['latest_chapter'],
+                       '链接': f'{research.BASE}/page/{r["book_id"]}'} for r in ranked[:50]],
+                     hide_index=True, width='stretch',
+                     column_config={'链接': st.column_config.LinkColumn('链接', display_text='打开')})
+    with all_tab:
+        a, b, c = st.columns(3)
+        channel = a.selectbox('频道', ['男频', '女频'], key='all_channel')
+        board = b.selectbox('榜单', ['新书榜', '阅读榜'], key='all_board')
+        categories = sorted({r['category'] for r in rows if r['channel'] == channel and r['board'] == board})
+        category = c.selectbox('分类', categories, key=f'all_category_{channel}_{board}') if categories else None
+        st.dataframe([{'排名': r['rank'], '书名': entry_title(r), '标签': r['note_tags'], '在读（万）': wan(r['reading']),
+                       '状态': r['status'], '最新章节': r['latest_chapter'], '更新时间': r['updated_at'],
+                       '链接': f'{research.BASE}/page/{r["book_id"]}'}
+                      for r in rows if (r['channel'], r['board'], r['category']) == (channel, board, category)],
+                     hide_index=True, width='stretch',
+                     column_config={'链接': st.column_config.LinkColumn('链接', display_text='打开')})
+    with notes_tab:
+        books = {}
+        for r in rows:
+            books.setdefault(r['book_id'], r)
+        picked = st.selectbox('选择一本书', list(books), key='note_book', format_func=lambda n:
+                              f'{books[n]["channel"]}{books[n]["board"]} · {books[n]["category"]} · 第 {books[n]["rank"]} 名 · {entry_title(books[n])}')
+        book_row = books[picked]
+        st.caption(f'在浏览器里打开 {research.BASE}/page/{picked} 查看完整书名和简介。')
+        with st.form(f'note_form_{picked}'):
+            title = st.text_input('书名', value=book_row['note_title'] or '', key=f'note_title_{picked}')
+            tags = st.text_input('标签', value=book_row['note_tags'] or '', key=f'note_tags_{picked}',
+                                 placeholder='例如：盗墓, 系统, 无敌流')
+            note = st.text_area('备注', value=book_row['note'] or '', key=f'note_text_{picked}',
+                                placeholder='卖点、开篇钩子、为什么能火')
+            if st.form_submit_button('保存标注', type='primary'):
+                try:
+                    research.save_note(store, picked, title, tags, note)
+                    notice('标注已保存。')
+                    st.rerun()
+                except ValidationError as error:
+                    st.error(str(error))
+        saved = research.notes(store)
+        if saved:
+            st.dataframe([{'书名': n['title'], '标签': n['tags'], '备注': n['note'],
+                           '链接': f'{research.BASE}/page/{n["book_id"]}'} for n in saved],
+                         hide_index=True, width='stretch',
+                         column_config={'链接': st.column_config.LinkColumn('链接', display_text='打开')})
+
+
 def show_memory():
     st.title('故事记忆')
     st.write('每条记忆都来自你确认过的定稿。前文重新定稿后，后续章节会标为待复核；这只是提醒，不影响继续写作。')
@@ -731,4 +835,4 @@ def show_model():
 
 
 {'作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '自动连写': show_autowrite, '故事记忆': show_memory,
- '存稿与导出': show_exports, '模型与记录': show_model}[section]()
+ '存稿与导出': show_exports, '选题研究': show_research, '模型与记录': show_model}[section]()

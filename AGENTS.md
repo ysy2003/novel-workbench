@@ -1,7 +1,7 @@
 # 小说工作台开发约定
 
 - 已确认：单人、本机 Python + Streamlit + SQLite；辅助用户写小说并在番茄发布，题材未定；模型 API 服务待补充。
-- `app.py` 是中文界面，`novel/store.py` 管理事务与版本，`novel/model.py` 是模型协议适配器，`novel/writer.py` 管理提示词与任务；`tests/` 覆盖业务状态及界面流程。
+- `app.py` 是中文界面，`novel/store.py` 管理事务与版本，`novel/model.py` 是模型协议适配器，`novel/writer.py` 管理提示词与任务；`novel/autowrite.py` 是自动连写；`novel/research.py` 抓取并分析番茄排行榜公开数据（不做字体解码、不抓正文）；`tests/` 覆盖业务状态及界面流程。
 - 开发环境 Python 3.11+，依赖在 `requirements.lock.txt`；启动 `python -m streamlit run app.py`，测试 `python -m pytest -q`。
 - 用户内容保存在 `data/` 或 `NOVEL_DB_PATH`；不得将 `.env`、数据库、真实 API 密钥提交到 Git。测试只能使用临时数据库与显式测试数据。
 - 新输出先保存成候选版本，不能自动覆盖作者稿或自动定稿。局部重写必须精确匹配唯一原文。唯一例外是自动连写（2026-10-02 用户决定）：只对它按细纲新建的章节自动采用候选稿并定稿，逐步检查、任一步失败即停，不得改动已有章节；开启“细纲不够时自动续写”时，可把 AI 细纲自动采用到空位，不得覆盖已有细纲。

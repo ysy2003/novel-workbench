@@ -133,7 +133,21 @@ class Store:
             CREATE TABLE IF NOT EXISTS beats(
                 book_id INTEGER NOT NULL REFERENCES books(id), number INTEGER NOT NULL,
                 title TEXT NOT NULL, brief TEXT NOT NULL, PRIMARY KEY(book_id, number));
-            PRAGMA user_version=2;
+            CREATE TABLE IF NOT EXISTS rank_snapshots(
+                id INTEGER PRIMARY KEY, stat_date TEXT NOT NULL DEFAULT '', pages INTEGER NOT NULL DEFAULT 0,
+                failed TEXT NOT NULL DEFAULT '[]',
+                fetched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            CREATE TABLE IF NOT EXISTS rank_entries(
+                snapshot_id INTEGER NOT NULL REFERENCES rank_snapshots(id), channel TEXT NOT NULL,
+                board TEXT NOT NULL, category_id INTEGER NOT NULL, category TEXT NOT NULL, rank INTEGER NOT NULL,
+                book_id TEXT NOT NULL, title TEXT NOT NULL, title_complete INTEGER NOT NULL, reading INTEGER,
+                status TEXT NOT NULL DEFAULT '', latest_chapter TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY(snapshot_id, channel, board, category_id, rank));
+            CREATE TABLE IF NOT EXISTS rank_notes(
+                book_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            PRAGMA user_version=3;
             ''')
 
     @contextmanager
