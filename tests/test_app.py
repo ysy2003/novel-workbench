@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from novel import research
+import json
+
+from novel import analysis, research
 from novel.store import Store
 
 
@@ -202,6 +204,28 @@ def test_research_section_shows_snapshots_and_saves_title_notes(app):
     button(at, '保存标注').click().run()
     assert not at.exception
     assert research.notes(db)[0]['title'] == '盗墓：八卦创雷'
+
+
+def test_research_breakdown_and_report_tabs_show_saved_cards_and_reports(app):
+    at, db = app
+    new_book(at)
+    row = {'channel': '男频', 'board': '新书榜', 'category_id': 751, 'category': '悬疑灵异', 'rank': 1,
+           'book_id': '111', 'title': '盗墓□八创雷', 'title_complete': 0, 'reading': 134000, 'status': '连载中',
+           'latest_chapter': '第79章', 'updated_at': ''}
+    research.save_snapshot(db, '10-04 24:00', 1, [row], [])
+    research.save_details(db, '111', {'title': '盗墓：八岁创雷法', 'status': '连载中', 'tags': ['盗墓'],
+                                      'word_count': 177000, 'intro': '简介', 'chapters': ['第1章 乱世绝境']})
+    card = {field: '内容' for field in analysis.FIELDS}
+    with db.connect(True) as c:
+        c.execute('INSERT INTO analyses(book_id,title,category,source,sample_chars,card) VALUES(?,?,?,?,?,?)',
+                  ('111', '盗墓：八岁创雷法', '悬疑灵异', '简介 + 目录 1 章', 0, json.dumps(card, ensure_ascii=False)))
+        c.execute('INSERT INTO reports(category,card_ids,report) VALUES(?,?,?)',
+                  ('悬疑灵异', '[1]', json.dumps({field: '规律' for field in analysis.REPORT_FIELDS}, ensure_ascii=False)))
+    at.radio('section').set_value('选题研究').run()
+    assert not at.exception
+    assert any(b.label == '抓取这一页的书籍详情' for b in at.button)
+    assert any('盗墓：八岁创雷法' in e.label for e in at.expander)
+    assert any('悬疑灵异' in m.value and '题材报告' in m.value for m in at.markdown)
 
 
 def test_settings_form_does_not_overwrite_another_windows_changes(app):

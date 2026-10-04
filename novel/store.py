@@ -147,7 +147,22 @@ class Store:
                 book_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
                 note TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-            PRAGMA user_version=3;
+            CREATE TABLE IF NOT EXISTS analyses(
+                id INTEGER PRIMARY KEY, book_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', sample_chars INTEGER NOT NULL,
+                card TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', usage TEXT NOT NULL DEFAULT '{}',
+                elapsed REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            CREATE TABLE IF NOT EXISTS book_details(
+                book_id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]', word_count INTEGER, intro TEXT NOT NULL DEFAULT '',
+                chapters TEXT NOT NULL DEFAULT '[]',
+                fetched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            CREATE TABLE IF NOT EXISTS reports(
+                id INTEGER PRIMARY KEY, category TEXT NOT NULL, card_ids TEXT NOT NULL, report TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '', usage TEXT NOT NULL DEFAULT '{}', elapsed REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+            PRAGMA user_version=5;
             ''')
 
     @contextmanager

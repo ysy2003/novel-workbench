@@ -105,3 +105,38 @@ def test_notes_fill_in_readable_titles_for_entries(db):
     research.save_note(db, 'a', '夜班守则', '规则怪谈,都市', '开篇钩子强')
     assert research.entries(db, shot)[0]['note_title'] == '夜班守则'
     assert research.notes(db)[0]['tags'] == '规则怪谈,都市'
+
+
+def detail(title='盗墓：八岁创雷法', tags=('悬疑灵异', '盗墓'), words='17.7', unit='万字',
+           intro='【盗墓】张海歌穿越盗墓世界，开局被屠村。', chapters=('第1章 乱世绝境', '第2章 归途赐名')):
+    return ('<div class="info-name"><h1>' + title + '</h1></div><div class="info-label">'
+            '<span class="info-label-yellow">连载中</span>' + ''.join(f'<span class="info-label-grey">{t}</span>' for t in tags)
+            + f'</div><div class="info-count"><div class="info-count-word"><span class="detail">{words}</span>'
+            f'<span class="text">{unit}</span></div></div><div class="info-last"><a href="/reader/9" class="chapter-item-title">'
+            '<span class="info-last-title">最近更新：第2章 归途赐名</span></a></div>'
+            f'<div class="page-abstract-content"><p>{intro}</p></div><div class="page-directory-content">'
+            '<div class="volume volume_first">第一卷</div><div class="chapter">'
+            + ''.join(f'<div class="chapter-item"><a href="/reader/{i}" class="chapter-item-title">{c}</a></div>'
+                      for i, c in enumerate(chapters)) + '</div></div>')
+
+
+def test_book_page_details_are_parsed_without_the_latest_update_link():
+    assert research.parse_book_page(detail()) == {
+        'title': '盗墓：八岁创雷法', 'status': '连载中', 'tags': ['悬疑灵异', '盗墓'], 'word_count': 177000,
+        'intro': '【盗墓】张海歌穿越盗墓世界，开局被屠村。', 'chapters': ['第1章 乱世绝境', '第2章 归途赐名']}
+    assert research.parse_book_page(detail(words='9876', unit='字'))['word_count'] == 9876
+
+
+def test_fetched_details_give_rank_entries_readable_titles_and_record_failures(db):
+    shot = snapshot(db, '10-04 24:00', [(751, '悬疑灵异', 1, '111', 100000, 10), (751, '悬疑灵异', 2, '222', 90000, 9)])
+
+    def serve(request):
+        if request.url.path == '/page/111':
+            return httpx.Response(200, text=detail())
+        return httpx.Response(200, text='<html>验证页面</html>')
+    summary = research.fetch_details(db, ['111', '222'], httpx.MockTransport(serve), delay=0)
+    assert summary['fetched'] == 1
+    assert summary['failed'] == [{'book_id': '222', 'reason': '页面里没有书名'}]
+    rows = research.entries(db, shot)
+    assert [r['detail_title'] for r in rows] == ['盗墓：八岁创雷法', None]
+    assert research.details(db, '111')['chapters'] == ['第1章 乱世绝境', '第2章 归途赐名']

@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from novel.autowrite import BEAT_BATCH, LOOKAHEAD, MAX_CHAPTERS, auto_chapters, autowrite, capacity
-from novel import research
+from novel import analysis, research
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -612,7 +612,125 @@ def wan(value):
 
 
 def entry_title(row):
-    return row.get('note_title') or row['title']
+    return row.get('note_title') or row.get('detail_title') or row['title']
+
+
+def flat(value):
+    if isinstance(value, dict):
+        return '；'.join(f'{key}：{flat(item)}' for key, item in value.items())
+    if isinstance(value, list):
+        return '；'.join(flat(item) for item in value)
+    return str(value)
+
+
+def show_fields(data, fields):
+    for field in fields:
+        value = data.get(field)
+        if isinstance(value, list):
+            st.markdown(f'**{field}**')
+            for item in value:
+                st.markdown('- ' + (' · '.join(flat(v) for v in item.values()) if isinstance(item, dict) else flat(item)))
+        else:
+            st.markdown(f'**{field}**：{flat(value)}')
+
+
+def show_breakdown(rows):
+    st.caption('先抓取一页榜单（10 本）的书籍详情：书名、标签、字数、简介和完整目录都是正常文字。'
+               'AI 根据详情生成分析卡，也可以附上你合法拿到的正文或阅读笔记；补充样本不会保存。')
+    a, b, c = st.columns(3)
+    channel = a.selectbox('频道', ['男频', '女频'], key='bd_channel')
+    board = b.selectbox('榜单', ['新书榜', '阅读榜'], key='bd_board')
+    categories = sorted({r['category'] for r in rows if r['channel'] == channel and r['board'] == board})
+    if not categories:
+        st.info('这份快照里没有这个榜单。')
+        return
+    category = c.selectbox('分类', categories, key=f'bd_category_{channel}_{board}')
+    books = [r for r in rows if (r['channel'], r['board'], r['category']) == (channel, board, category)]
+    carded = {card['book_id'] for card in analysis.cards(store)}
+    st.dataframe([{'排名': r['rank'], '书名': entry_title(r), '在读（万）': wan(r['reading']),
+                   '详情': '已抓取' if r['detail_title'] else '未抓取', '分析卡': '有' if r['book_id'] in carded else ''}
+                  for r in books], hide_index=True, width='stretch')
+    if st.button('抓取这一页的书籍详情', key=f'bd_fetch_{category}'):
+        with st.status('正在抓取书籍详情…', expanded=True) as status:
+            summary = research.fetch_details(store, [r['book_id'] for r in books],
+                                             progress=lambda done, total, _: status.update(label=f'正在抓取 {done}/{total}'))
+            status.update(label=f'抓取 {summary["fetched"]} 本，失败 {len(summary["failed"])} 本',
+                          state='complete' if not summary['failed'] else 'error')
+        st.rerun()
+    ready = [r for r in books if r['detail_title']]
+    todo = [r for r in ready if r['book_id'] not in carded]
+    if not config.ready:
+        st.caption('配置模型后才能生成分析卡。')
+    if st.button(f'为还没有分析卡的 {len(todo)} 本生成分析卡', type='primary', key=f'bd_batch_{category}',
+                 disabled=not (config.ready and todo)):
+        outcomes = []
+        with st.status('正在生成分析卡…', expanded=True) as status:
+            client = ModelClient(config)
+            for index, r in enumerate(todo, 1):
+                status.update(label=f'正在分析 {index}/{len(todo)}：{entry_title(r)}')
+                try:
+                    analysis.analyze_book(store, client, r['book_id'], category=category)
+                    outcomes.append(f'完成：{entry_title(r)}')
+                except (ValidationError, ModelError) as error:
+                    outcomes.append(f'失败：{entry_title(r)}（{error}）')
+                st.write(outcomes[-1])
+            status.update(label='分析完成', state='complete')
+        st.session_state[f'bd_outcomes_{category}'] = outcomes
+        st.rerun()
+    outcomes = st.session_state.get(f'bd_outcomes_{category}', [])
+    failures = [line for line in outcomes if line.startswith('失败')]
+    if outcomes:
+        st.caption(f'上次批量分析：成功 {len(outcomes) - len(failures)} 本，失败 {len(failures)} 本。失败的可以再点一次重试。')
+        for line in failures:
+            st.warning(line)
+    if ready:
+        with st.expander('附补充样本分析单本（可选）'):
+            lookup = {r['book_id']: r for r in ready}
+            picked = st.selectbox('书', list(lookup), format_func=lambda n: entry_title(lookup[n]), key=f'bd_one_{category}')
+            source = st.text_input('样本说明', placeholder='例如：第 1–3 章正文 / 我的阅读笔记', key=f'bd_source_{category}')
+            extra = st.text_area('补充样本', height=200, key=f'bd_extra_{category}',
+                                 placeholder='粘贴你合法拿到的正文，或你自己写的阅读笔记。只发送给模型，不会保存。')
+            if st.button('分析这一本', disabled=not config.ready, key=f'bd_run_one_{category}'):
+                try:
+                    with st.spinner('正在分析…'):
+                        analysis.analyze_book(store, ModelClient(config), picked, category=category,
+                                              extra_text=extra, extra_source=source)
+                    notice('分析卡已生成。')
+                    st.rerun()
+                except (ValidationError, ModelError) as error:
+                    st.error(str(error))
+    st.markdown(f'### {category} 的分析卡')
+    for card in [c for c in analysis.cards(store) if c['category'] == category]:
+        with st.expander(f'{card["title"]} · {card["source"]}'):
+            show_fields(card['card'], analysis.FIELDS)
+            if st.button('删除这张分析卡', key=f'bd_delete_{card["id"]}'):
+                analysis.delete_card(store, card['id'])
+                st.rerun()
+
+
+def show_reports():
+    cards = analysis.cards(store)
+    categories = sorted({c['category'] for c in cards if c['category']})
+    if not categories:
+        st.info('还没有分析卡。先在“拆书分析”里给一个分类生成分析卡。')
+        return
+    category = st.selectbox('分类', categories, key='report_category')
+    books = {c['book_id'] or c['id'] for c in cards if c['category'] == category}
+    st.caption(f'{category} 有 {len(books)} 本书的分析卡。题材报告横向对比这些书：共同卖点、书名公式、人设模板、开篇规律、'
+               '爽点节奏、差异化空间和新书建议。')
+    if st.button('生成题材报告', type='primary', key='report_run', disabled=not (config.ready and len(books) >= 2)):
+        try:
+            with st.spinner('正在生成题材报告…'):
+                analysis.category_report(store, ModelClient(config), category)
+            notice('题材报告已生成。')
+            st.rerun()
+        except (ValidationError, ModelError) as error:
+            st.error(str(error))
+    for index, report in enumerate(r for r in analysis.reports(store) if r['category'] == category):
+        st.markdown(f'### {category} 题材报告 · {report["created_at"][:16].replace("T", " ")} UTC · {len(report["card_ids"])} 本')
+        show_fields(report['report'], analysis.REPORT_FIELDS)
+        if index == 0:
+            st.divider()
 
 
 def show_research():
@@ -646,7 +764,8 @@ def show_research():
     older = [s['id'] for s in shots if s['id'] < current and s['stat_date'] != shot['stat_date']]
     previous = st.selectbox('对比', [None, *older], key=f'rank_compare_{current}',
                             index=1 if older else 0, format_func=lambda n: '不对比' if n is None else labels[n])
-    heat_tab, rising_tab, all_tab, notes_tab = st.tabs(['题材热度', '新书冲榜', '全部榜单', '书名标注'])
+    heat_tab, rising_tab, all_tab, breakdown_tab, report_tab, notes_tab = st.tabs(
+        ['题材热度', '新书冲榜', '全部榜单', '拆书分析', '题材报告', '书名标注'])
     rows = research.entries(store, current)
     with heat_tab:
         board = st.radio('榜单', ['新书榜', '阅读榜'], horizontal=True, key='heat_board')
@@ -681,6 +800,10 @@ def show_research():
                       for r in rows if (r['channel'], r['board'], r['category']) == (channel, board, category)],
                      hide_index=True, width='stretch',
                      column_config={'链接': st.column_config.LinkColumn('链接', display_text='打开')})
+    with breakdown_tab:
+        show_breakdown(rows)
+    with report_tab:
+        show_reports()
     with notes_tab:
         books = {}
         for r in rows:

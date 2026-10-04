@@ -1,8 +1,7 @@
-"""选题研究：番茄排行榜快照。
+"""选题研究：番茄排行榜快照与书籍详情。
 
-只抓公开榜单页上能正常读出的数据（排名、书的 ID、在读、状态、最新章节、更新时间）。
-书名、作者、简介用了字体反爬，部分字是私有码位；这里不做字体解码，残缺处显示为 □，
-可读书名由作者在浏览器里看过后自己标注。
+榜单页上的书名、作者、简介用了字体反爬（部分字是私有码位），这里不做字体解码，残缺处显示为 □。
+书的详情页（/page/{id}）的书名、标签、字数、简介、目录是正常文字，按需逐本抓取。不抓正文。
 """
 from __future__ import annotations
 
@@ -125,8 +124,10 @@ def snapshots(store):
 
 
 def entries(store, snapshot_id):
-    return store.all('SELECT e.*, n.title AS note_title, n.tags AS note_tags, n.note AS note FROM rank_entries e '
-                     'LEFT JOIN rank_notes n ON n.book_id=e.book_id WHERE e.snapshot_id=? '
+    return store.all('SELECT e.*, n.title AS note_title, n.tags AS note_tags, n.note AS note, d.title AS detail_title, '
+                     'd.tags AS detail_tags, d.word_count AS word_count FROM rank_entries e '
+                     'LEFT JOIN rank_notes n ON n.book_id=e.book_id LEFT JOIN book_details d ON d.book_id=e.book_id '
+                     'WHERE e.snapshot_id=? '
                      'ORDER BY e.channel, e.board, e.category, e.rank', (snapshot_id,))
 
 
@@ -177,3 +178,63 @@ def save_note(store, book_id, title, tags, note):
 
 def notes(store):
     return store.all('SELECT * FROM rank_notes ORDER BY updated_at DESC')
+
+
+def parse_book_page(page):
+    def field(pattern):
+        match = re.search(pattern, page, flags=re.S)
+        return HIDDEN.sub('□', _text(match.group(1))) if match else ''
+    words = re.search(r'info-count-word"><span class="detail">([\d.]+)</span><span class="text">([^<]*)</span>', page)
+    start = page.find('page-directory-content')
+    directory = page[start:] if start >= 0 else ''
+    return {'title': field(r'<div class="info-name"><h1>(.*?)</h1>'),
+            'status': field(r'class="info-label-yellow">(.*?)</span>'),
+            'tags': [HIDDEN.sub('□', _text(tag)) for tag in re.findall(r'class="info-label-grey">(.*?)</span>', page)],
+            'word_count': round(float(words.group(1)) * (10_000 if '万' in words.group(2) else 1)) if words else None,
+            'intro': field(r'class="page-abstract-content"><p>(.*?)</p>'),
+            'chapters': [HIDDEN.sub('□', _text(c)) for c in re.findall(r'class="chapter-item-title"[^>]*>(.*?)</a>', directory)]}
+
+
+def save_details(store, book_id, info):
+    with store.connect(True) as c:
+        c.execute('INSERT INTO book_details(book_id,title,status,tags,word_count,intro,chapters) VALUES(?,?,?,?,?,?,?) '
+                  'ON CONFLICT(book_id) DO UPDATE SET title=excluded.title, status=excluded.status, tags=excluded.tags, '
+                  "word_count=excluded.word_count, intro=excluded.intro, chapters=excluded.chapters, "
+                  "fetched_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+                  (book_id, info['title'], info['status'], json.dumps(info['tags'], ensure_ascii=False),
+                   info['word_count'], info['intro'], json.dumps(info['chapters'], ensure_ascii=False)))
+
+
+def fetch_details(store, book_ids, transport=None, delay=2.0, progress=None):
+    """逐本抓取详情页（书名、标签、字数、简介、目录），每本之间间隔 delay 秒。"""
+    progress = progress or (lambda done, total, book_id: None)
+    fetched, failed = 0, []
+    with httpx.Client(base_url=BASE, transport=transport, timeout=20, follow_redirects=False,
+                      headers={'User-Agent': USER_AGENT}) as client:
+        for index, book_id in enumerate(book_ids, 1):
+            progress(index, len(book_ids), book_id)
+            if index > 1:
+                time.sleep(delay)
+            try:
+                response = client.get(f'/page/{book_id}')
+            except httpx.HTTPError as error:
+                failed.append({'book_id': book_id, 'reason': error.__class__.__name__})
+                continue
+            if response.status_code != 200:
+                failed.append({'book_id': book_id, 'reason': f'HTTP {response.status_code}'})
+                continue
+            info = parse_book_page(response.text)
+            if not info['title']:
+                failed.append({'book_id': book_id, 'reason': '页面里没有书名'})
+                continue
+            save_details(store, book_id, info)
+            fetched += 1
+    return {'fetched': fetched, 'failed': failed}
+
+
+def details(store, book_id):
+    rows = store.all('SELECT * FROM book_details WHERE book_id=?', (book_id,))
+    if not rows:
+        return None
+    row = rows[0]
+    return {**row, 'tags': json.loads(row['tags']), 'chapters': json.loads(row['chapters'])}
