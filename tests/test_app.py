@@ -5,7 +5,7 @@ from streamlit.testing.v1 import AppTest
 
 import json
 
-from novel import analysis, research, topics
+from novel import analysis, research, shelf, topics
 from novel.store import Store
 
 
@@ -251,6 +251,23 @@ def test_topic_tab_creates_a_new_book_from_an_edited_draft(app):
     assert [b['title'] for b in db.books()][0] == '作者改过的书名'
     assert db.volumes(db.books()[0]['id'])[0]['title'] == '第一夜'
     assert at.radio('section').value == '作品设定'
+
+
+def test_shelf_lists_books_records_platform_stats_and_opens_a_book(app):
+    at, db = app
+    new_book(at)
+    second = db.create_book('第二本书')
+    at.radio('section').set_value('书架').run()
+    assert not at.exception
+    assert any('2 本书' in c.value for c in at.caption)
+    at.number_input('stats_metric_0').set_value(120)
+    button(at, '保存数据').click().run()
+    assert not at.exception
+    assert shelf.stats(db, 1)[0]['metrics'] == {'在读人数': 120}
+    at.selectbox('shelf_open').select(second)
+    button(at, '打开这本书').click().run()
+    assert not at.exception
+    assert at.selectbox('book_pick').value == second and at.radio('section').value == '作品设定'
 
 
 def test_settings_form_does_not_overwrite_another_windows_changes(app):

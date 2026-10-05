@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from novel.autowrite import BEAT_BATCH, LOOKAHEAD, MAX_CHAPTERS, auto_chapters, autowrite, capacity
-from novel import analysis, research, topics
+from novel import analysis, research, shelf, topics
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -86,7 +86,7 @@ with st.sidebar:
         if st.session_state.get('book_pick') not in book_names:
             st.session_state['book_pick'] = books[0]['id']
         book_id = st.selectbox('当前作品', list(book_names), format_func=book_names.get, key='book_pick')
-        section = st.radio('工作区', ['作品设定', '大纲', '章节工作区', '自动连写', '故事记忆', '存稿与导出', '选题研究', '模型与记录'], key='section')
+        section = st.radio('工作区', ['书架', '作品设定', '大纲', '章节工作区', '自动连写', '故事记忆', '存稿与导出', '选题研究', '模型与记录'], key='section')
         st.divider()
         with st.expander('＋ 新建作品'):
             book_creation('sidebar_create')
@@ -145,6 +145,88 @@ def save_editor(chapter_id):
     except ValidationError as error:
         st.session_state[f'edit_error_{chapter_id}'] = str(error)
         return False
+
+
+def show_shelf():
+    st.title('书架')
+    rows = shelf.overview(store)
+    st.caption(f'共 {len(rows)} 本书。字数按定稿正文去掉空白计算；待审阅是定稿仍为自动连写原样的章节。')
+    st.dataframe([{'书名': r['title'], '题材': r['genre'], '章节': r['chapters'], '定稿': r['finalized'],
+                   '定稿字数（万）': round(r['chars'] / 10000, 1), '细纲到': r['last_beat'], '细纲领先': r['beats_ahead'],
+                   '待审阅': r['auto_unreviewed'], '待复核': r['stale'], '已发布': r['published'],
+                   '最近更新（UTC）': r['updated_at'][:16].replace('T', ' '),
+                   '最新在读': (r['latest_stats'] or {}).get('metrics', {}).get('在读人数')} for r in rows],
+                 hide_index=True, width='stretch')
+    titles = {r['book_id']: r['title'] for r in rows}
+    a, b = st.columns([3, 1])
+    picked = a.selectbox('打开作品', list(titles), format_func=titles.get, key='shelf_open', label_visibility='collapsed')
+    if b.button('打开这本书', key='shelf_open_button'):
+        st.session_state['pending_book'] = picked
+        st.rerun()
+    stats_tab, batch_tab = st.tabs(['平台数据', '批量连写'])
+    with stats_tab:
+        st.caption('从番茄作家后台抄录数字，没有的项留空。同一本书同一天只保留一条，再次保存会覆盖。这里不会登录或抓取你的作者后台。')
+        with st.form('stats_form', clear_on_submit=True):
+            book = st.selectbox('作品', list(titles), format_func=titles.get, key='stats_book',
+                                index=list(titles).index(book_id) if book_id in titles else 0)
+            a, b = st.columns(2)
+            day = a.date_input('日期', key='stats_date')
+            published = b.number_input('已发布章数', min_value=0, step=1, value=None, key='stats_published')
+            columns = st.columns(len(shelf.METRICS))
+            metrics = {name: column.number_input(name, min_value=0.0, value=None, key=f'stats_metric_{index}')
+                       for index, (name, column) in enumerate(zip(shelf.METRICS, columns))}
+            note = st.text_input('备注', placeholder='例如：上了新书推荐；改了书名', key='stats_note')
+            if st.form_submit_button('保存数据', type='primary'):
+                try:
+                    clean = {name: (int(value) if value is not None and float(value).is_integer() else value)
+                             for name, value in metrics.items()}
+                    shelf.save_stats(store, book, day.isoformat(), None if published is None else int(published), clean, note)
+                    notice('平台数据已保存。')
+                    st.rerun()
+                except ValidationError as error:
+                    st.error(str(error))
+        compared = shelf.comparison(store)
+        if compared:
+            def cell(row, name):
+                value, change = row['latest']['metrics'].get(name), row['changes'].get(name)
+                if value is None:
+                    return ''
+                return f'{value}' + (f'（{change:+g}）' if change is not None else '')
+            st.markdown('#### 各书最新数据（括号里是与上一条记录相比的变化）')
+            st.dataframe([{'书名': r['title'], '日期': r['latest']['recorded_on'], '已发布章数': r['latest']['published_chapters'],
+                           **{name: cell(r, name) for name in shelf.METRICS}, '备注': r['latest']['note']} for r in compared],
+                         hide_index=True, width='stretch')
+            for r in compared:
+                with st.expander(f'{r["title"]} 的历史记录'):
+                    st.dataframe([{'日期': s['recorded_on'], '已发布章数': s['published_chapters'], **s['metrics'], '备注': s['note']}
+                                  for s in shelf.stats(store, r['book_id'])], hide_index=True, width='stretch')
+    with batch_tab:
+        st.caption('依次给选中的每本书自动连写若干章，规则和单本“自动连写”相同；某本书不满足前提（比如有没定稿的章节）就跳过并说明原因。'
+                   '每章约 1–1.5 分钟，运行期间不要关闭页面。')
+        chosen = st.multiselect('作品', list(titles), format_func=titles.get, key='batch_books')
+        a, b = st.columns(2)
+        count = a.number_input('每本连写章数', min_value=1, max_value=MAX_CHAPTERS, value=2, step=1, key='batch_count')
+        target = b.number_input('每章目标字数', min_value=500, max_value=12000, value=2000, step=100, key='batch_target')
+        auto = st.checkbox('细纲不够时自动续写', value=True, key='batch_auto_beats')
+        if not config.ready:
+            st.caption('配置模型后即可使用。')
+        if st.button('开始批量连写', type='primary', disabled=not (config.ready and chosen), key='batch_run'):
+            with st.status('正在批量连写…', expanded=True) as status:
+                results = shelf.batch_autowrite(store, Writer(store, ModelClient(config)), chosen, int(count), int(target), auto,
+                                                lambda title, number, step: status.update(label=f'《{title}》第 {number} 章：{step}'))
+                status.update(label='批量连写结束', state='complete')
+            st.session_state['batch_results'] = results
+            st.rerun()
+        for r in st.session_state.get('batch_results', []):
+            if r['error']:
+                st.warning(f'《{r["title"]}》没有开始：{r["error"]}')
+            elif r['stopped']:
+                st.warning(f'《{r["title"]}》写完 {r["done"]} 章后，在第 {r["stopped"]["number"]} 章“{r["stopped"]["step"]}”停下：'
+                           f'{r["stopped"]["reason"]}')
+            else:
+                st.success(f'《{r["title"]}》写完 {r["done"]} 章。')
+            for warning in r['warnings']:
+                st.caption(warning)
 
 
 def show_settings():
@@ -1043,5 +1125,5 @@ def show_model():
     st.text_area('返回内容', run['output'], height=260, disabled=True, key=f'audit_output_{selected}')
 
 
-{'作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '自动连写': show_autowrite, '故事记忆': show_memory,
+{'书架': show_shelf, '作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '自动连写': show_autowrite, '故事记忆': show_memory,
  '存稿与导出': show_exports, '选题研究': show_research, '模型与记录': show_model}[section]()

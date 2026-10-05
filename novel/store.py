@@ -175,7 +175,11 @@ class Store:
             CREATE TABLE IF NOT EXISTS model_failures(
                 id INTEGER PRIMARY KEY, task TEXT NOT NULL, output TEXT NOT NULL, error TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-            PRAGMA user_version=7;
+            CREATE TABLE IF NOT EXISTS platform_stats(
+                id INTEGER PRIMARY KEY, book_id INTEGER NOT NULL REFERENCES books(id), recorded_on TEXT NOT NULL,
+                published_chapters INTEGER, metrics TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), UNIQUE(book_id, recorded_on));
+            PRAGMA user_version=8;
             ''')
 
     @contextmanager
