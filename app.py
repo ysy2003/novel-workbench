@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from novel.autowrite import BEAT_BATCH, LOOKAHEAD, MAX_CHAPTERS, auto_chapters, autowrite, capacity
-from novel import analysis, research, shelf, topics
+from novel import analysis, polish, research, shelf, topics
 from novel.model import ModelClient, ModelConfig, ModelError, parse_beats, parse_memory
 from novel.store import Store, ValidationError, safe_filename, trim
 from novel.writer import RECENT_CHAPTERS, TASKS, Writer
@@ -86,7 +86,7 @@ with st.sidebar:
         if st.session_state.get('book_pick') not in book_names:
             st.session_state['book_pick'] = books[0]['id']
         book_id = st.selectbox('当前作品', list(book_names), format_func=book_names.get, key='book_pick')
-        section = st.radio('工作区', ['书架', '作品设定', '大纲', '章节工作区', '自动连写', '故事记忆', '存稿与导出', '选题研究', '模型与记录'], key='section')
+        section = st.radio('工作区', ['书架', '作品设定', '大纲', '章节工作区', '润色与文风', '自动连写', '故事记忆', '存稿与导出', '选题研究', '模型与记录'], key='section')
         st.divider()
         with st.expander('＋ 新建作品'):
             book_creation('sidebar_create')
@@ -304,7 +304,7 @@ def show_assistant(chapter_id, revision):
                 st.rerun()
             except (ValidationError, ModelError) as error:
                 st.error(str(error))
-    runs = store.runs(book_id, chapter_id)
+    runs = [r for r in store.runs(book_id, chapter_id) if r['task'] in labels]
     if not runs:
         return
     st.divider()
@@ -382,7 +382,7 @@ def show_history(chapter_id, revision):
     st.caption(chosen['title'])
     st.text_area('版本正文', value=chosen['body'], height=250, disabled=True, key=f'preview_revision_{picked}')
     if chosen['source'] == 'AI 候选稿':
-        st.caption('候选稿请从写作助手采用；过期候选可参考内容手动合并。')
+        st.caption('候选稿请从写作助手或“润色与文风”采用；过期候选可参考内容手动合并。')
     if st.button('恢复为新的当前稿', disabled=picked == revision['id'] or chosen['source'] == 'AI 候选稿', key=f'restore_{chapter_id}'):
         try:
             store.restore(chapter_id, picked, revision['id'])
@@ -687,6 +687,194 @@ def show_autowrite():
     for chapter in written:
         with st.expander(f'第 {chapter["number"]} 章 · {chapter["title"]} · 约 {count_chars(chapter["body"])} 字'):
             st.text_area('正文', chapter['body'], height=320, disabled=True, key=f'auto_body_{chapter["id"]}')
+
+
+def diff_markdown(segments):
+    """把逐字差异写成 Markdown：删去的标红划线，新增的标绿。"""
+    styles = {'same': '{}', 'removed': ':red-background[~~{}~~]', 'added': ':green-background[{}]'}
+    escape = lambda text: re.sub(r'([\\`*_\[\]#~$<>|:])', r'\\\1', text.replace('\n', ' '))
+    return ''.join(styles[kind].format(escape(text)) for kind, text in segments if kind == 'same' or text.strip())
+
+
+def show_polish():
+    st.title('润色与文风')
+    st.write('文风体检在本机按词表统计，不调用模型，帮你找出套话和读起来像模板的句子。'
+             'AI 逐句建议和整章润色都要你确认后才会改动正文，原版本保留在历史里。')
+    st.caption('这里的目标是让文字更好读，不提供 AI 检测分数，也不以通过检测为目的。AI 改过的文字仍属于 AI 参与的内容，'
+               '发布时请按平台要求如实声明。最有效的改法，是对照体检结果自己动手改。')
+    if not chapters:
+        st.info('先在“章节工作区”创建章节并写好正文。')
+        return
+    lookup = {ch['id']: ch for ch in chapters}
+    chapter_id = st.selectbox('章节', list(lookup), format_func=lambda n: f'第 {lookup[n]["number"]} 章 · {lookup[n]["title"]}',
+                              key=f'polish_pick_{book_id}')
+    chapter = store.chapter(chapter_id)
+    revision = store.revision(chapter['current_revision_id'])
+    st.caption(f'当前稿 · 版本 {revision["id"]} · {revision["source"]} · 约 {count_chars(revision["body"])} 字')
+    if chapter['finalized_revision_id']:
+        st.caption('本章已定稿。采用修改后，当前稿会和定稿不同；导出用的是定稿，改完请回“章节工作区”重新定稿。')
+    checkup, advice, whole, compare = st.tabs(['文风体检', '逐句建议', '整章润色', '全书对比'])
+    with checkup:
+        show_checkup(revision)
+    with advice:
+        show_suggestions(chapter_id, revision)
+    with whole:
+        show_whole_polish(chapter_id, revision)
+    with compare:
+        show_style_comparison()
+
+
+def show_checkup(revision):
+    if not revision['body'].strip():
+        st.info('本章正文还是空的。')
+        return
+    report = polish.check(revision['body'])
+    long = report['sentences']['long']
+    columns = st.columns(4)
+    columns[0].metric('套话处数', len(report['hits']))
+    columns[1].metric('每千字套话', report['density'])
+    columns[2].metric('平均句长', report['sentences']['average'])
+    columns[3].metric('平均段长', report['paragraphs']['average'])
+    st.caption(f'破折号每千字 {report["dashes"]} 处，省略号每千字 {report["ellipses"]} 处；'
+               f'超过 {polish.LONG_SENTENCE} 字的长句 {len(long)} 句；{polish.FRAGMENT} 字以内的碎句（不含对话）'
+               f'{len(report["sentences"]["fragments"])} 句，偶尔用有力，连着用就成了腔调。')
+    if report['hits']:
+        st.markdown('#### 套话位置')
+        st.caption('按类别：' + '，'.join(f'{k} {v} 处' for k, v in report['categories'].items()) +
+                   '。这些词不是不能用，要看密度，以及能不能换成人物此刻具体的动作、对话和细节。')
+        st.dataframe([{'类别': h['category'], '套话': h['text'], '所在句子': h['sentence']} for h in report['hits']],
+                     hide_index=True, width='stretch')
+    else:
+        st.success('没有命中词表里的套话。')
+    if report['repeats']:
+        st.markdown('#### 重复词组')
+        st.caption('同一章里出现 3 次以上的词组，人名和固定叫法可以忽略。')
+        st.dataframe([{'词组': r['phrase'], '次数': r['count']} for r in report['repeats']], hide_index=True)
+    for label, rows in (('长句', long), ('碎句', report['sentences']['fragments'])):
+        if rows:
+            with st.expander(f'{label}（{len(rows)}）'):
+                st.write('\n\n'.join(rows))
+    with st.expander('词表'):
+        st.caption('词表在 `novel/polish.py` 的 `PATTERNS` 里，可以自行增删。同一处文字只算一次。')
+        st.dataframe([{'类别': c, '名称': label, '规则': pattern} for c, label, pattern in polish.PATTERNS],
+                     hide_index=True, width='stretch')
+
+
+def show_suggestions(chapter_id, revision):
+    st.caption('把正文和体检结果发给模型，返回逐句修改建议。勾选要采用的，确认后保存为新版本；不改剧情、人物和视角。')
+    instructions = st.text_area('本次要求（可选）', placeholder='例如：对话保留口语感；少用比喻。', key=f'suggest_req_{chapter_id}')
+    if not config.ready:
+        st.caption('配置模型后即可使用。请到“模型与记录”查看接入方法。')
+    if st.button('生成修改建议', type='primary', disabled=not (config.ready and revision['body'].strip()),
+                 key=f'suggest_run_{chapter_id}'):
+        try:
+            with st.spinner('正在生成修改建议…'):
+                polish.suggest(store, ModelClient(config), chapter_id, instructions)
+            st.rerun()
+        except (ValidationError, ModelError) as error:
+            st.error(str(error))
+    runs = [r for r in store.runs(book_id, chapter_id) if r['task'] == polish.SUGGEST_TASK]
+    if not runs:
+        return
+    run = runs[0]
+    st.divider()
+    st.caption(f'最近一批建议 · {run["status"]} · 依据版本 {run["revision_id"]}')
+    if run['error']:
+        st.warning(run['error'])
+    if run['status'] != '成功':
+        if run['output']:
+            st.text_area('模型原始输出', run['output'], height=160, disabled=True, key=f'suggest_output_{run["id"]}')
+        return
+    items = polish.annotate(revision['body'], polish.parse_suggestions(run['output']))
+    applied = revision['base_revision_id'] == run['revision_id'] and revision['source'].startswith('采纳润色建议')
+    stale = run['revision_id'] != revision['id']
+    if applied:
+        st.success(f'已{revision["source"]}，保存为版本 {revision["id"]}。想继续改可以重新生成。')
+    elif stale:
+        st.warning('正文在生成这批建议后有了新版本，这批建议只能参考，不能直接采用。请重新生成。')
+    if not items:
+        st.success('模型认为这一版没有需要改的句子。')
+        return
+    for index, item in enumerate(items):
+        usable = item['status'] == '可用' and not stale
+        note = '' if item['status'] == '可用' else f'（{item["status"]}，不能采用）'
+        st.checkbox(f'第 {index + 1} 条{note}', key=f'suggest_pick_{run["id"]}_{index}', disabled=not usable)
+        st.markdown(diff_markdown(polish.inline_diff(item['原句'], item['改为'])))
+        if item['理由']:
+            st.caption(item['理由'])
+    picks = [i for i in range(len(items)) if st.session_state.get(f'suggest_pick_{run["id"]}_{i}')]
+    if not stale:
+        st.caption(f'已勾选 {len(picks)} 条。')
+    if st.button('采用勾选的建议', type='primary', disabled=stale or not picks, key=f'suggest_apply_{run["id"]}'):
+        try:
+            polish.apply_suggestions(store, run['id'], picks)
+            reset_editor(chapter_id)
+            notice(f'已采用 {len(picks)} 处建议，保存为新版本；原版本仍在历史中。')
+            st.rerun()
+        except ValidationError as error:
+            st.error(str(error))
+
+
+def show_whole_polish(chapter_id, revision):
+    st.caption('把整章交给模型润色，结果保存为候选稿。对比改动后，由你决定是否采用。')
+    mode = st.radio('润色方式', list(polish.POLISH_MODES), horizontal=True, key=f'polish_mode_{chapter_id}')
+    st.caption(polish.POLISH_MODES[mode])
+    instructions = st.text_area('润色要求' + ('' if mode == '自定义要求' else '（可选）'),
+                                placeholder='例如：节奏再快一点；保留方言。', key=f'polish_req_{chapter_id}')
+    if not config.ready:
+        st.caption('配置模型后即可使用。请到“模型与记录”查看接入方法。')
+    if st.button('开始整章润色', type='primary', disabled=not (config.ready and revision['body'].strip()),
+                 key=f'polish_run_{chapter_id}'):
+        try:
+            with st.spinner('正在润色整章…'):
+                polish.polish(store, ModelClient(config), chapter_id, mode, instructions)
+            st.rerun()
+        except (ValidationError, ModelError) as error:
+            st.error(str(error))
+    runs = [r for r in store.runs(book_id, chapter_id) if r['task'] == polish.POLISH_TASK]
+    if not runs:
+        return
+    run = runs[0]
+    st.divider()
+    st.caption(f'最近一次润色 · {run["status"]} · 依据版本 {run["revision_id"]}')
+    if run['error']:
+        st.warning(run['error'])
+    if not run['candidate_id']:
+        if run['output']:
+            st.text_area('模型原始输出', run['output'], height=160, disabled=True, key=f'polish_output_{run["id"]}')
+        return
+    candidate = store.revision(run['candidate_id'])
+    base = store.revision(candidate['base_revision_id'])
+    rows = polish.changed_paragraphs(base['body'], candidate['body'])
+    st.caption(f'字数 {count_chars(base["body"])} → {count_chars(candidate["body"])}；改动 {len(rows)} 段。'
+               '红色划线是删去的文字，绿色是新加的文字。')
+    adopted = revision['source'] == polish.ADOPT_SOURCE and revision['base_revision_id'] == candidate['base_revision_id']
+    stale = candidate['base_revision_id'] != revision['id']
+    if adopted:
+        st.success(f'已采用这份润色稿，保存为版本 {revision["id"]}。')
+    elif stale:
+        st.warning('正文在润色后有了新版本，这份润色稿不能直接采用；可以参考改动手动修改，或重新润色。')
+    for row in rows:
+        with st.container(border=True):
+            st.markdown(diff_markdown(polish.inline_diff(row['old'], row['new'])))
+    with st.expander('润色稿全文'):
+        st.text_area('润色稿', candidate['body'], height=320, disabled=True, key=f'polish_body_{candidate["id"]}')
+    if not adopted and st.button('采用润色稿', type='primary', disabled=stale, key=f'polish_adopt_{candidate["id"]}'):
+        try:
+            store.adopt_candidate(chapter_id, candidate['id'], source=polish.ADOPT_SOURCE)
+            reset_editor(chapter_id)
+            notice('润色稿已成为当前稿；原版本仍在历史中。')
+            st.rerun()
+        except ValidationError as error:
+            st.error(str(error))
+
+
+def show_style_comparison():
+    st.caption('按每章当前稿统计，方便找出问题最重的章节。来源为“自动连写”的，是自动写完后没有改过的章节。')
+    st.dataframe([{'章节': f'第 {r["number"]} 章', '标题': r['title'], '当前稿来源': r['source'], '字数': r['chars'],
+                   '套话处数': r['hits'], '每千字套话': r['density'], '破折号/千字': r['dashes'],
+                   '省略号/千字': r['ellipses'], '平均句长': r['sentence'], '碎句': r['fragments'], '重复词组': r['repeats']}
+                  for r in polish.book_report(store, book_id)], hide_index=True, width='stretch')
 
 
 def wan(value):
@@ -1125,5 +1313,5 @@ def show_model():
     st.text_area('返回内容', run['output'], height=260, disabled=True, key=f'audit_output_{selected}')
 
 
-{'书架': show_shelf, '作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '自动连写': show_autowrite, '故事记忆': show_memory,
+{'书架': show_shelf, '作品设定': show_settings, '大纲': show_outline, '章节工作区': show_chapters, '润色与文风': show_polish, '自动连写': show_autowrite, '故事记忆': show_memory,
  '存稿与导出': show_exports, '选题研究': show_research, '模型与记录': show_model}[section]()

@@ -5,7 +5,7 @@ from streamlit.testing.v1 import AppTest
 
 import json
 
-from novel import analysis, research, shelf, topics
+from novel import analysis, polish, research, shelf, topics
 from novel.store import Store
 
 
@@ -71,7 +71,7 @@ def test_sidebar_can_create_second_book_and_all_sections_render(app):
     assert not at.exception
     assert len(db.books()) == 2
     assert at.selectbox('book_pick').value == 2
-    for section in ('故事记忆', '存稿与导出', '模型与记录', '作品设定'):
+    for section in ('故事记忆', '存稿与导出', '模型与记录', '润色与文风', '作品设定'):
         at.radio('section').set_value(section).run()
         assert not at.exception, section
 
@@ -279,3 +279,28 @@ def test_settings_form_does_not_overwrite_another_windows_changes(app):
     assert not at.exception
     assert db.book(1)['title'] == '另一窗口改过的标题'
     assert any('其他窗口更新' in e.value for e in at.error)
+
+
+def test_polish_section_checks_style_and_applies_only_picked_suggestions(app):
+    at, db = app
+    new_book(at)
+    at.radio('section').set_value('章节工作区').run()
+    at.text_input('new_chapter_title').input('旧灯')
+    button(at, '创建章节').click().run()
+    at.text_area('edit_body_1').input('林川嘴角勾起一抹弧度。他深吸一口气。').run()
+    revision = db.chapter(1)['current_revision_id']
+    run = db.start_run(1, 1, revision, db.book(1)['context_version'], polish.SUGGEST_TASK, 'm', 'https://example.test', [])
+    db.finish_run(run, '成功', json.dumps({'建议': [{'原句': '林川嘴角勾起一抹弧度。', '改为': '林川笑了。', '理由': '套话'},
+                                                  {'原句': '他深吸一口气。', '改为': '他停了停。', '理由': '套话'}]},
+                                        ensure_ascii=False))
+    at.radio('section').set_value('润色与文风').run()
+    assert not at.exception
+    assert next(m for m in at.metric if m.label == '套话处数').value == '3'
+    assert button(at, '生成修改建议').disabled and button(at, '开始整章润色').disabled
+    at.checkbox(f'suggest_pick_{run}_0').check().run()
+    button(at, '采用勾选的建议').click().run()
+    assert not at.exception
+    saved = db.revision(db.chapter(1)['current_revision_id'])
+    assert saved['body'] == '林川笑了。他深吸一口气。' and saved['source'] == '采纳润色建议 1 处'
+    at.radio('section').set_value('章节工作区').run()
+    assert at.text_area('edit_body_1').value == '林川笑了。他深吸一口气。'
