@@ -27,8 +27,8 @@ def button(at, label):
 
 
 def new_book(at):
-    at.text_input('welcome_create_title').input('雨夜来信')
-    at.text_area('welcome_create_premise').input('修灯人收到一封没有署名的信。')
+    at.text_input('welcome_create_title').input('示例作品')
+    at.text_area('welcome_create_premise').input('测试用的故事创意。')
     button(at, '创建作品').click().run()
     assert not at.exception
 
@@ -48,7 +48,7 @@ def test_create_edit_finalize_continue_export_and_reopen(app):
     assert not at.exception
     assert db.chapter(1)['finalized_revision_id']
     at.text_input('new_chapter_title').input('来客')
-    at.text_area('new_chapter_plan').input('一个陌生人来到修灯铺。')
+    at.text_area('new_chapter_plan').input('一个陌生人来到店里。')
     button(at, '创建章节').click().run()
     assert not at.exception
     assert at.selectbox('chapter_pick_1').value == 2

@@ -147,6 +147,11 @@ def save_editor(chapter_id):
         return False
 
 
+def number_text(value):
+    """表格里的数字转成文字，没有数据时留空，不显示 None；配合右对齐的文字列使用。"""
+    return '' if value is None else f'{value:g}'
+
+
 def show_shelf():
     st.title('书架')
     rows = shelf.overview(store)
@@ -155,8 +160,8 @@ def show_shelf():
                    '定稿字数（万）': round(r['chars'] / 10000, 1), '细纲到': r['last_beat'], '细纲领先': r['beats_ahead'],
                    '待审阅': r['auto_unreviewed'], '待复核': r['stale'], '已发布': r['published'],
                    '最近更新（UTC）': r['updated_at'][:16].replace('T', ' '),
-                   '最新在读': (r['latest_stats'] or {}).get('metrics', {}).get('在读人数')} for r in rows],
-                 hide_index=True, width='stretch')
+                   '最新在读': number_text((r['latest_stats'] or {}).get('metrics', {}).get('在读人数'))} for r in rows],
+                 hide_index=True, width='stretch', column_config={'最新在读': st.column_config.TextColumn(alignment='right')})
     titles = {r['book_id']: r['title'] for r in rows}
     a, b = st.columns([3, 1])
     picked = a.selectbox('打开作品', list(titles), format_func=titles.get, key='shelf_open', label_visibility='collapsed')
@@ -198,8 +203,11 @@ def show_shelf():
                          hide_index=True, width='stretch')
             for r in compared:
                 with st.expander(f'{r["title"]} 的历史记录'):
-                    st.dataframe([{'日期': s['recorded_on'], '已发布章数': s['published_chapters'], **s['metrics'], '备注': s['note']}
-                                  for s in shelf.stats(store, r['book_id'])], hide_index=True, width='stretch')
+                    st.dataframe([{'日期': s['recorded_on'], '已发布章数': number_text(s['published_chapters']),
+                                   **{name: number_text(s['metrics'].get(name)) for name in shelf.METRICS}, '备注': s['note']}
+                                  for s in shelf.stats(store, r['book_id'])], hide_index=True, width='stretch',
+                                 column_config={name: st.column_config.TextColumn(alignment='right')
+                                                for name in ('已发布章数', *shelf.METRICS)})
     with batch_tab:
         st.caption('依次给选中的每本书自动连写若干章，规则和单本“自动连写”相同；某本书不满足前提（比如有没定稿的章节）就跳过并说明原因。'
                    '每章约 1–1.5 分钟，运行期间不要关闭页面。')
@@ -567,7 +575,7 @@ def show_chapters():
     show_beat_progress(quiet=True)
     with st.expander('＋ 新建章节', expanded=not chapters):
         with st.form(f'new_chapter_{book_id}', clear_on_submit=True):
-            title = st.text_input('新章节标题', placeholder='例如：雨夜来信', key='new_chapter_title')
+            title = st.text_input('新章节标题', placeholder='例如：意外的访客', key='new_chapter_title')
             plan = st.text_area('本章计划', placeholder='本章发生什么？人物作出什么选择？结尾留下什么？', key='new_chapter_plan')
             if st.form_submit_button('创建章节', type='primary'):
                 try:

@@ -13,7 +13,7 @@ def db(tmp_path):
 
 
 def story(db):
-    book = db.create_book('夜行灯', premise='一个修灯人寻找失踪的姐姐。')
+    book = db.create_book('夜行灯', premise='一个守夜人寻找失踪的姐姐。')
     chapter = db.create_chapter(book, '旧灯', '收到一封信')
     current = db.chapter(chapter)['current_revision_id']
     revision = db.save_revision(chapter, '旧灯', '收到一封信', '林川左臂受伤。', current)
@@ -21,18 +21,18 @@ def story(db):
 
 
 def finalize(db, book, chapter, revision, value='受伤'):
-    db.finalize(chapter, revision, '林川在修灯时受伤。',
+    db.finalize(chapter, revision, '林川在巡夜时受伤。',
                 [{'entity': '林川', 'attribute': '左臂', 'value': value}],
                 db.book(book)['context_version'])
 
 
 def test_persistence_and_non_destructive_restore(db):
     book, chapter, revision = story(db)
-    newer = db.save_revision(chapter, '雨夜', '寻找线索', '林川收起了信。', revision)
+    newer = db.save_revision(chapter, '夜巡', '寻找线索', '林川收起了地图。', revision)
     restored = db.restore(chapter, revision, newer)
     assert restored not in (revision, newer)
     reopened = Store(db.path)
-    assert reopened.revision(newer)['body'] == '林川收起了信。'
+    assert reopened.revision(newer)['body'] == '林川收起了地图。'
     assert reopened.revision(restored)['body'] == '林川左臂受伤。'
     assert reopened.chapter(chapter)['current_revision_id'] == restored
 
@@ -151,7 +151,7 @@ def test_settings_change_keeps_finalized_memory_usable(db):
     book, chapter, revision = story(db)
     finalize(db, book, chapter, revision)
     second = db.create_chapter(book, '次日', '')
-    db.update_book(book, title='夜行灯', premise='一个修灯人寻找失踪的姐姐。', genre='悬疑',
+    db.update_book(book, title='夜行灯', premise='一个守夜人寻找失踪的姐姐。', genre='悬疑',
                    bible='林川怕水。', style='', outline='姐姐在第十章出现。')
     assert db.memory(book)[0]['stale'] == 0
     assert db.context(second)['facts'][0]['value'] == '受伤'
@@ -160,7 +160,7 @@ def test_settings_change_keeps_finalized_memory_usable(db):
 def test_settings_change_still_rejects_candidates_generated_before_it(db):
     book, chapter, revision = story(db)
     candidate = db.add_candidate(chapter, '旧灯', '', 'AI 稿', revision, db.book(book)['context_version'])
-    db.update_book(book, title='夜行灯', premise='一个修灯人寻找失踪的姐姐。', genre='',
+    db.update_book(book, title='夜行灯', premise='一个守夜人寻找失踪的姐姐。', genre='',
                    bible='林川怕水。', style='', outline='')
     with pytest.raises(Conflict):
         db.adopt_candidate(chapter, candidate)
