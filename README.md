@@ -1,5 +1,7 @@
 # 灯下 · 小说工作台
 
+[![tests](https://github.com/ysy2003/novel-workbench/actions/workflows/tests.yml/badge.svg)](https://github.com/ysy2003/novel-workbench/actions/workflows/tests.yml)
+
 用于自己写小说并在番茄连载的本地工具。作品、章节版本、人物与剧情记忆保存在 SQLite；没有模型密钥也能开书、写作、定稿和导出。
 
 ## 界面截图
@@ -130,7 +132,7 @@ python -m pytest -q
 python -m compileall -q app.py novel
 ```
 
-存储测试使用真实临时 SQLite，界面流程使用 Streamlit AppTest，模型协议测试使用 HTTP 模拟传输。这些测试覆盖工程行为，不能证明小说质量或平台接收情况。具体检查结果和后续任务见 `docs/project.md`。
+每次推送到 main 或提交 PR 时，GitHub Actions 会在 Python 3.11 和 3.13 上安装锁定依赖、做编译检查并运行全部测试（`.github/workflows/tests.yml`），不需要模型密钥。存储测试使用真实临时 SQLite，界面流程使用 Streamlit AppTest，模型协议测试使用 HTTP 模拟传输。这些测试覆盖工程行为，不能证明小说质量或平台接收情况。具体检查结果和后续任务见 `docs/project.md`。
 
 ## 许可证
 
