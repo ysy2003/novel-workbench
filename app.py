@@ -1041,7 +1041,7 @@ def show_research():
         board = st.radio('榜单', ['新书榜', '阅读榜'], horizontal=True, key='heat_board')
         st.caption('按分类合计前 10 名的在读人数。新书榜更能看出当下什么题材在起量。')
         st.dataframe([{'频道': h['channel'], '分类': h['category'], '前10在读合计（万）': wan(h['total']),
-                       '变化（万）': wan(h['change']), '变化%': h['change_pct']}
+                       **({'变化（万）': wan(h['change']), '变化%': h['change_pct']} if previous else {})}
                       for h in research.category_heat(store, current, previous) if h['board'] == board],
                      hide_index=True, width='stretch')
     with rising_tab:

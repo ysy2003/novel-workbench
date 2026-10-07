@@ -2,6 +2,30 @@
 
 用于自己写小说并在番茄连载的本地工具。作品、章节版本、人物与剧情记忆保存在 SQLite；没有模型密钥也能开书、写作、定稿和导出。
 
+## 界面截图
+
+截图使用示例数据：书目和正文是为演示编写的；榜单是 2026-10-04 抓取的番茄公开数据，只显示分类合计。
+
+**书架**：几本书的章节、定稿、细纲进度、待审阅和最新在读人数。
+
+![书架](docs/screenshots/shelf.png)
+
+**章节工作区**：章节计划和正文，右侧是写作助手（规划、初稿、改写、一致性检查、提取记忆）。
+
+![章节工作区](docs/screenshots/chapter.png)
+
+**选题研究**：按分类合计番茄排行榜前 10 名的在读人数。
+
+![选题研究](docs/screenshots/research.png)
+
+**润色与文风 · 文风体检**：本机按词表找出套话，标出所在句子。
+
+![文风体检](docs/screenshots/polish-check.png)
+
+**润色与文风 · 逐句建议**：模型给出的修改建议，红色划线是删去的文字，绿色是新加的文字；勾选后才保存为新版本。
+
+![逐句建议](docs/screenshots/polish-suggest.png)
+
 ## 启动
 
 需要 Python 3.11+。macOS 可以运行 `start.command`，它会在项目 `.venv` 中安装锁定依赖，然后启动本机服务。启动后打开 <http://127.0.0.1:8501>；在终端按 Ctrl+C 停止。若端口已被当前预览占用，请先关闭旧服务，或设置 `NOVEL_PORT=8502`。
@@ -82,7 +106,7 @@ NOVEL_PLAN_REASONING=low
 
 当前实现的是 Chat Completions 协议：Bearer 密钥、`model/messages/stream/max_tokens` 请求，以及 `choices[0].message.content` 响应。服务商必须支持此协议与这些参数；其他协议要增加适配器。没有预设服务商、默认模型或付费调用。提示词、返回结果和服务返回的 token 用量保存在本地调用记录中；密钥不入库。
 
-接口格式参考 [DeepSeek 官方调用文档](https://api-docs.deepseek.com/)，这只是协议参考，不代表已选定该服务。当前没有用户 API，真实连通性、费用和写作效果尚未验证。失败请求不自动重试，以免重复计费；超时后可能仍产生服务端用量。模型输出截断会保留供查看，但不会直接变成可采纳的完整候选稿。
+接口格式参考 [DeepSeek 官方调用文档](https://api-docs.deepseek.com/)，这只是协议参考，其他兼容 Chat Completions 的服务也可以接入。已用 DeepSeek 的 deepseek-flash 实测写作、连写、拆书和润色，记录见 `docs/project.md`；写作效果仍需作者自己判断。失败请求不自动重试，以免重复计费；超时后可能仍产生服务端用量。模型输出截断会保留供查看，但不会直接变成可采纳的完整候选稿。
 
 ## 保存与恢复
 
@@ -107,3 +131,7 @@ python -m compileall -q app.py novel
 ```
 
 存储测试使用真实临时 SQLite，界面流程使用 Streamlit AppTest，模型协议测试使用 HTTP 模拟传输。这些测试覆盖工程行为，不能证明小说质量或平台接收情况。具体检查结果和后续任务见 `docs/project.md`。
+
+## 许可证
+
+[MIT](LICENSE)

@@ -301,14 +301,15 @@ def changed_paragraphs(old, new):
     return rows
 
 
-def inline_diff(old, new):
-    segments = []
-    for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-        if tag == 'equal':
+def inline_diff(old, new, short=2):
+    """逐字差异；夹在两处改动之间、不超过 short 个字的相同片段并入改动，免得一个词被拆成碎片。"""
+    opcodes = SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+    segments, removed, added = [], '', ''
+    for index, (tag, i1, i2, j1, j2) in enumerate(opcodes):
+        if tag == 'equal' and not (0 < index < len(opcodes) - 1 and i2 - i1 <= short):
+            segments += [(kind, text) for kind, text in (('removed', removed), ('added', added)) if text]
             segments.append(('same', old[i1:i2]))
-            continue
-        if i2 > i1:
-            segments.append(('removed', old[i1:i2]))
-        if j2 > j1:
-            segments.append(('added', new[j1:j2]))
-    return segments
+            removed = added = ''
+        else:
+            removed, added = removed + old[i1:i2], added + new[j1:j2]
+    return segments + [(kind, text) for kind, text in (('removed', removed), ('added', added)) if text]

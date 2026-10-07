@@ -187,6 +187,8 @@ def test_changed_paragraphs_and_inline_diff():
     assert polish.changed_paragraphs(old, new) == [{'old': '乙段原文。', 'new': '乙段改文。'}, {'old': '', 'new': '丁段。'}]
     assert polish.inline_diff('乙段原文。', '乙段改文。') == [('same', '乙段'), ('removed', '原'), ('added', '改'),
                                                          ('same', '文。')]
+    assert polish.inline_diff('林川不由得站了起来。', '林川从柜台后站起来。') == [
+        ('same', '林川'), ('removed', '不由得站了'), ('added', '从柜台后站'), ('same', '起来。')]
 
 
 def test_book_report_lists_every_chapter_with_its_current_source(db):
