@@ -204,6 +204,22 @@ def test_memory_parser_ignores_extra_top_level_fields():
     assert data == {'summary': '收到信件', 'facts': []}
 
 
+def test_memory_parser_merges_facts_about_the_same_attribute(tmp_path):
+    facts = [{'entity': '旧信', 'attribute': '位置', 'value': '十封锁在局长的铁皮柜里'},
+             {'entity': '程默', 'attribute': '行为', 'value': '没有销毁旧信'},
+             {'entity': ' 旧信', 'attribute': '位置 ', 'value': '编号七那封藏在程默外套内袋'},
+             {'entity': '程默', 'attribute': '行为', 'value': '没有销毁旧信'}]
+    data = parse_memory(json.dumps({'summary': '程默留下了信。', 'facts': facts}, ensure_ascii=False))
+    assert data['facts'] == [{'entity': '旧信', 'attribute': '位置', 'value': '十封锁在局长的铁皮柜里；编号七那封藏在程默外套内袋'},
+                             {'entity': '程默', 'attribute': '行为', 'value': '没有销毁旧信'}]
+    db = Store(tmp_path / 'strict.sqlite3')
+    book = db.create_book('旧城邮差')
+    chapter = db.create_chapter(book, '局长')
+    revision = db.save_revision(chapter, '局长', '', '正文。', db.chapter(chapter)['current_revision_id'])
+    with pytest.raises(ValidationError, match='同一对象'):
+        db.finalize(chapter, revision, '摘要', facts, db.book(book)['context_version'])
+
+
 def capture_bodies():
     bodies = []
 

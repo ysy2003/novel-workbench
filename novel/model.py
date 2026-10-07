@@ -129,12 +129,33 @@ def load_json(text):
     raise ValueError('No JSON object found')
 
 
+def merge_facts(facts):
+    """模型有时把同一对象的同一属性拆成几条（如十封信锁在柜里、一封藏在口袋），合并成一条，值用“；”连接。
+    只用于模型输出；作者手填的记忆仍按原规则校验。"""
+    if not isinstance(facts, list):
+        return facts
+    merged, result = {}, []
+    for fact in facts:
+        if not (isinstance(fact, dict) and all(isinstance(fact.get(k), str) for k in ('entity', 'attribute', 'value'))):
+            result.append(fact)
+            continue
+        key = (fact['entity'].strip(), fact['attribute'].strip())
+        value = fact['value'].strip()
+        if key in merged:
+            if value not in merged[key]['value'].split('；'):
+                merged[key]['value'] += '；' + value
+            continue
+        merged[key] = {**fact, 'entity': key[0], 'attribute': key[1], 'value': value}
+        result.append(merged[key])
+    return result
+
+
 def parse_memory(text):
     try:
         data = load_json(text)
         if not isinstance(data, dict) or not {'summary', 'facts'} <= set(data):
             raise ValueError('Expected memory')
-        summary, facts = validate_memory(data['summary'], data['facts'])
+        summary, facts = validate_memory(data['summary'], merge_facts(data['facts']))
         return {'summary': summary, 'facts': facts}
     except (TypeError, KeyError, ValueError) as error:
         raise ValidationError('记忆提取结果格式不完整。请手动填写本章摘要与事实，或重新提取。') from error
