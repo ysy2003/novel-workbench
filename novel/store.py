@@ -512,11 +512,12 @@ class Store:
                 source.backup(target)
             return dest.read_bytes()
 
-    def start_run(self, book_id, chapter_id, revision_id, context_version, task, model, endpoint, prompt):
+    def start_run(self, book_id, chapter_id, revision_id, context_version, task, model, endpoint, prompt, prompt_version='1'):
         with self.connect(True) as c:
-            return c.execute('INSERT INTO runs(book_id,chapter_id,revision_id,context_version,task,model,endpoint,prompt) '
-                             'VALUES(?,?,?,?,?,?,?,?)', (book_id, chapter_id, revision_id, context_version,
-                                                        task, model, endpoint, json.dumps(prompt, ensure_ascii=False))).lastrowid
+            return c.execute('INSERT INTO runs(book_id,chapter_id,revision_id,context_version,task,model,endpoint,prompt,'
+                             'prompt_version) VALUES(?,?,?,?,?,?,?,?,?)',
+                             (book_id, chapter_id, revision_id, context_version, task, model, endpoint,
+                              json.dumps(prompt, ensure_ascii=False), prompt_version)).lastrowid
 
     def finish_run(self, run_id, status, output='', usage=None, error='', elapsed=0):
         with self.connect(True) as c:

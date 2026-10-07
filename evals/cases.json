@@ -1,0 +1,80 @@
+[
+  {
+    "id": "lighthouse-3",
+    "story": "lighthouse",
+    "chapter": 3,
+    "focus": "总纲暗线和细纲里的作者备注不进正文",
+    "checks": {
+      "leaks": ["第一任守塔员", "坠塔"],
+      "names": {"周屿": ["周宇", "周雨"], "阿岚": ["阿兰", "阿蓝"]},
+      "future": ["工作证", "旧雨衣", "湿脚印"],
+      "memory_required": [["一九八七|1987"], ["阿岚"]],
+      "memory_forbidden": ["第一任", "坠塔", "工作证"]
+    }
+  },
+  {
+    "id": "lighthouse-4",
+    "story": "lighthouse",
+    "chapter": 4,
+    "focus": "后续细纲只铺垫，不提前写储物间和铁皮箱",
+    "checks": {
+      "leaks": ["第一任守塔员", "坠塔"],
+      "names": {"周屿": ["周宇", "周雨"], "阿岚": ["阿兰", "阿蓝"]},
+      "future": ["工作证", "旧雨衣", "船票"],
+      "memory_required": [["脚印"]],
+      "memory_forbidden": ["第一任", "坠塔", "工作证"]
+    }
+  },
+  {
+    "id": "tenant-3",
+    "story": "tenant",
+    "chapter": 3,
+    "focus": "人物全名保持一致，暗线不进正文",
+    "checks": {
+      "leaks": ["镜像室友", "复制体"],
+      "names": {"韩素梅": ["韩秀梅", "韩淑梅", "韩素美"], "陆小鹿": ["陆晓鹿", "陆小露"], "许棠": ["徐棠", "许堂"]},
+      "future": ["两个许棠", "七个名字"],
+      "memory_required": [["牙刷"]],
+      "memory_forbidden": ["镜像", "复制体"]
+    }
+  },
+  {
+    "id": "tenant-4",
+    "story": "tenant",
+    "chapter": 4,
+    "focus": "开头接上一章不复述，记下江野以为见过许棠",
+    "checks": {
+      "leaks": ["镜像室友", "复制体"],
+      "names": {"韩素梅": ["韩秀梅", "韩淑梅", "韩素美"], "陆小鹿": ["陆晓鹿", "陆小露"], "许棠": ["徐棠", "许堂"]},
+      "future": ["两个许棠", "七个名字"],
+      "memory_required": [["江野", "三点|3点|凌晨"]],
+      "memory_forbidden": ["镜像", "复制体", "两个许棠"]
+    }
+  },
+  {
+    "id": "postman-3",
+    "story": "postman",
+    "chapter": 3,
+    "focus": "细纲作者备注里的真名不进正文",
+    "checks": {
+      "leaks": ["程远山", "地下室"],
+      "names": {"梁秋生": ["梁秋声", "梁秋升", "梁秋森"], "程默": ["陈默", "程墨"]},
+      "future": ["许佩兰", "平面图"],
+      "memory_required": [["梁秋生", "销毁|烧"]],
+      "memory_forbidden": ["程远山", "许佩兰"]
+    }
+  },
+  {
+    "id": "postman-4",
+    "story": "postman",
+    "chapter": 4,
+    "focus": "收信人的名字留到下一章，记下信的内容",
+    "checks": {
+      "leaks": ["程远山"],
+      "names": {"梁秋生": ["梁秋声", "梁秋升", "梁秋森"], "程默": ["陈默", "程墨"]},
+      "future": ["许佩兰"],
+      "memory_required": [["信", "六岁|掉进河|落水"]],
+      "memory_forbidden": ["程远山", "许佩兰"]
+    }
+  }
+]

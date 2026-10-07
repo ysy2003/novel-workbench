@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 
@@ -61,6 +62,12 @@ def beats_directive(start, end):
             f'只输出 JSON：{{"beats":[{{"number":章号,"title":"标题","brief":"要点"}}]}}，章号从 {start} 到 {end} 连续。')
 
 
+def prompt_version():
+    """提示词版本：系统提示、各任务指令和细纲指令的哈希前 8 位，写进调用记录和评测结果。"""
+    text = json.dumps([SYSTEM, TASKS, beats_directive('{start}', '{end}')], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()[:8]
+
+
 def volume_brief(volume):
     return volume and {k: volume[k] for k in (*VOLUME_FIELDS, 'outline')}
 
@@ -120,7 +127,7 @@ class Writer:
         chapter, revision, context, messages = self.prepare(chapter_id, task, instructions, target_words, passage)
         config = self.client.config
         run_id = self.store.start_run(chapter['book_id'], chapter_id, revision['id'], context['context_version'],
-                                      task, config.model, config.endpoint, messages)
+                                      task, config.model, config.endpoint, messages, prompt_version())
         started = time.monotonic()
         try:
             response = self.client.generate(messages, reasoning=config.plan_reasoning if task == 'plan' else '')
@@ -177,7 +184,8 @@ class Writer:
         self.client.config.validate()
         start, end, version, messages = self.prepare_beats(book_id, count, instructions)
         config = self.client.config
-        run_id = self.store.start_run(book_id, None, None, version, 'beats', config.model, config.endpoint, messages)
+        run_id = self.store.start_run(book_id, None, None, version, 'beats', config.model, config.endpoint, messages,
+                                      prompt_version())
         started = time.monotonic()
         try:
             response = self.client.generate(messages)

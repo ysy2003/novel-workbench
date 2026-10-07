@@ -1,7 +1,7 @@
 # 小说工作台开发约定
 
 - 已确认：单人、本机 Python + Streamlit + SQLite；辅助用户写小说并在番茄发布，题材未定；模型 API 服务待补充。
-- `app.py` 是中文界面，`novel/store.py` 管理事务与版本，`novel/model.py` 是模型协议适配器，`novel/writer.py` 管理提示词与任务；`novel/autowrite.py` 是自动连写；`novel/research.py` 抓取并分析番茄排行榜公开数据（不做字体解码、不抓正文）；`novel/analysis.py` 是拆书分析卡与题材报告；`novel/topics.py` 是选题方案与开新书（新书由作者确认草稿后创建）；`novel/shelf.py` 是多开管理（书架总览、手动录入的平台数据、多本书排队连写）；`novel/polish.py` 是润色与文风（本地文风体检、逐句修改建议、整章润色；建议由作者勾选后才保存为新版本，润色稿是候选稿；只改善文字，不做 AI 检测分数或规避检测）；`tests/` 覆盖业务状态及界面流程。
+- `app.py` 是中文界面，`novel/store.py` 管理事务与版本，`novel/model.py` 是模型协议适配器，`novel/writer.py` 管理提示词与任务；`novel/autowrite.py` 是自动连写；`novel/research.py` 抓取并分析番茄排行榜公开数据（不做字体解码、不抓正文）；`novel/analysis.py` 是拆书分析卡与题材报告；`novel/topics.py` 是选题方案与开新书（新书由作者确认草稿后创建）；`novel/shelf.py` 是多开管理（书架总览、手动录入的平台数据、多本书排队连写）；`novel/evals.py` 是评测框架（`evals/` 里的示例故事和用例，规则打分、报告与对比；结果存 `data/evals/`，不碰作者书库）；`novel/polish.py` 是润色与文风（本地文风体检、逐句修改建议、整章润色；建议由作者勾选后才保存为新版本，润色稿是候选稿；只改善文字，不做 AI 检测分数或规避检测）；`tests/` 覆盖业务状态及界面流程。
 - 开发环境 Python 3.11+，依赖在 `requirements.lock.txt`；启动 `python -m streamlit run app.py`，测试 `python -m pytest -q`。
 - 用户内容保存在 `data/` 或 `NOVEL_DB_PATH`；不得将 `.env`、数据库、真实 API 密钥提交到 Git。测试只能使用临时数据库与显式测试数据。
 - 新输出先保存成候选版本，不能自动覆盖作者稿或自动定稿。局部重写必须精确匹配唯一原文。唯一例外是自动连写（2026-10-02 用户决定）：只对它按细纲新建的章节自动采用候选稿并定稿，逐步检查、任一步失败即停，不得改动已有章节；开启“细纲不够时自动续写”时，可把 AI 细纲自动采用到空位，不得覆盖已有细纲。
